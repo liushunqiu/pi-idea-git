@@ -209,14 +209,38 @@ doing nothing at all.
 
 ## Developing
 
-1. Plugins page → **Load development plugin** → this directory.
+1. Plugins page → **`···` → Load development plugin** → this directory.
 2. Edit `src/`, run `node tools/build.mjs`, and the view hot-reloads.
 3. `PluginCheck` then `PluginPack` to produce `dist/local.pi-idea-git-0.2.0.piplug`.
 
-> **Widening `permissions` needs a re-load.** Hot reload refuses a manifest that
-> requests more than the running instance was granted, so after changing the
-> permission list, load the plugin again from the Plugins page.
+### Driving the engine without the GUI
 
+`tools/drive.mjs` calls the same `onPanelInvoke` channels a view calls, with a
+stubbed `pi` global, so a flow can be exercised from a terminal or a test script:
+
+```bash
+node tools/drive.mjs /path/to/repo git/repo
+node tools/drive.mjs /path/to/repo git/stage '{"paths":["src/app.js"]}'
+node tools/drive.mjs /path/to/repo git/commit '{"message":"Fix the thing"}'
+```
+
+Run it under a reduced environment to match what the real plugin process
+actually receives — `PATH`, `LANG` and the temp variables, but **no `HOME`**:
+
+```bash
+env -i PATH="$PATH" TMPDIR="${TMPDIR:-/tmp}" node tools/drive.mjs . git/repo
+```
+
+That is how the engine's push path was verified against a real HTTPS remote
+without a credential prompt.
+
+> **Widening `permissions` needs a longer path than the reload button.**
+> Saving triggers a hot reload that refuses a manifest asking for more than the
+> running instance was granted. The card's **Reload** button is not enough
+> either: it intersects the new manifest with the permissions recorded in
+> `registry.json`, silently drops whatever is new, and still reports success.
+> Only **`···` → Load development plugin** (re-picking the folder) re-reads the
+> manifest and re-asks for consent.
 The repository notes under `.memories/` and `.agents/notes/` document the
 constraints that shaped this plugin; they are plain Markdown and ship with the
 package.
