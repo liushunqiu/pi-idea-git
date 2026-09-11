@@ -385,8 +385,23 @@
           event.target.disabled = true;
           const channel = checked ? "git/stage" : "git/unstage";
           const result = await invoke(channel, { paths: [file.path] });
-          if (!result.ok) toast(PIG.errorText(result), "error");
-          await refresh();
+          if (!result.ok) {
+            toast(PIG.errorText(result), "error");
+            await refresh();
+            return;
+          }
+          if (!checked || !file.insideSubmodule) {
+            await refresh();
+            return;
+          }
+          // Staging a submodule records which commit it points at; anything
+          // uncommitted inside it stays, so the row comes back unchecked. Say
+          // which of the two happened rather than letting the checkbox look
+          // broken — the first case means nothing at all was staged.
+          const fresh = await refresh();
+          const nowStaged = (fresh.staged ?? []).some((f) => f.path === file.path);
+          if (nowStaged) toast(t("submoduleStagedHint"), "info");
+          else toast(PIG.tf("submoduleInside", { path: file.path }), "error");
         },
       });
 
@@ -408,8 +423,23 @@
         h("span", { class: "status-cell", style: { color: statusColor(file.status) }, text: file.status === "?" ? "?" : file.status }),
         h("span", { class: "name", style: { color: statusColor(file.status) }, text: name }),
         directory ? h("span", { class: "path", text: directory }) : null,
+        // A submodule deserves a visible mark: its checkbox means something
+        // different from every other row's.
+        file.submodule
+          ? h("span", {
+            class: "badge",
+            text: t("submoduleBadge"),
+            title: submoduleTooltip(file),
+          })
+          : null,
       ]);
       return row;
+    }
+
+    /** Why a submodule row behaves differently, in the user's language. */
+    function submoduleTooltip(file) {
+      if (file.insideSubmodule) return PIG.tf("submoduleInside", { path: file.path });
+      return t("submoduleStagedHint");
     }
 
     function paintChanges() {
@@ -1019,7 +1049,7 @@
         state.repo = null;
         state.error = result.message ?? t("notARepository");
         paintAll();
-        return;
+        return state.repo ?? {};
       }
       state.repo = result;
       state.error = null;
@@ -1037,6 +1067,7 @@
       }
       paintAll();
       await loadDiff();
+      return result;
     }
 
     async function loadPrefs() {

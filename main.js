@@ -678,6 +678,7 @@ async function readStatus(repo) {
     if (kind === "1" || kind === "2") {
       const parts = token.split(" ");
       const xy = parts[1] ?? "..";
+      const sub = parts[2] ?? "N...";
       const track = kind === "2" ? parts[8] : "";
       const offset = kind === "2" ? 9 : 8;
       const filePath = parts.slice(offset).join(" ");
@@ -687,6 +688,17 @@ async function readStatus(repo) {
 
       const x = xy[0];
       const y = xy[1];
+      // `S<c><m><u>`: a submodule, with C=new commits, M=modified content,
+      // U=untracked content. Staging a submodule from the parent repository
+      // records which commit it points at; it cannot touch anything inside, so
+      // a submodule with dirty content keeps a worktree-side change that no
+      // amount of `git add` here will clear.
+      const isSubmodule = sub.startsWith("S") || parts[3] === "160000";
+      const subState = isSubmodule
+        ? { commits: sub[1] === "C", modified: sub[2] === "M", untracked: sub[3] === "U" }
+        : null;
+      const insideSubmodule = Boolean(subState && (subState.modified || subState.untracked));
+
       if (x !== ".") {
         staged.push({
           path: filePath,
@@ -694,6 +706,8 @@ async function readStatus(repo) {
           status: x,
           label: labelFor(x, false),
           score: track ? ` (${Number(track.slice(1))}%)` : "",
+          submodule: isSubmodule,
+          sub: subState,
         });
       }
       if (y !== ".") {
@@ -702,6 +716,10 @@ async function readStatus(repo) {
           originalPath,
           status: y,
           label: labelFor(y, false),
+          submodule: isSubmodule,
+          sub: subState,
+          // The remaining worktree change lives inside the submodule.
+          insideSubmodule,
         });
       }
       continue;

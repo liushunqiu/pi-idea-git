@@ -1614,6 +1614,9 @@ window.__PI_IDEA_GIT_SURFACE__ = "commit";
       replace: "Replace",
       draftedStaged: "Commit message drafted from everything staged",
       draftedFile: "Commit message drafted from {{file}}",
+      submoduleBadge: "submodule",
+      submoduleInside: "This change is inside the submodule {{path}}. The parent repository can only record which commit the submodule points at, so it cannot be committed from here. Commit inside the submodule first, then stage it here.",
+      submoduleStagedHint: "Staged the submodule's commit. Its own uncommitted changes stay inside it and still show as unstaged.",
       appShortcutHint: "The command palette belongs to the app: click back into the main window first, or press Alt+Space for the plugin launcher.",
       dropStashConfirm: "Drop this stash?",
       repositoryHint: "Open a folder that is inside a Git repository.",
@@ -1765,6 +1768,9 @@ window.__PI_IDEA_GIT_SURFACE__ = "commit";
       replace: "替换",
       draftedStaged: "已生成提交信息（来源：全部已暂存内容）",
       draftedFile: "已生成提交信息（来源：{{file}}）",
+      submoduleBadge: "子模块",
+      submoduleInside: "这个改动在子模块 {{path}} 内部。父仓库只能记录子模块指向哪个提交，无法从这里把它提交掉。请先在子模块里提交，再回到这里暂存。",
+      submoduleStagedHint: "已暂存子模块指向的提交。子模块内部未提交的改动仍然留在里面，所以它依旧显示为未暂存。",
       appShortcutHint: "命令面板由宿主提供，需先点回主窗口；或在视图内按 Alt+Space 打开插件启动器。",
       diff: "差异",
       dropStashConfirm: "删除该储藏？",
@@ -3232,8 +3238,23 @@ function markSubmodule(hunk) {
           event.target.disabled = true;
           const channel = checked ? "git/stage" : "git/unstage";
           const result = await invoke(channel, { paths: [file.path] });
-          if (!result.ok) toast(PIG.errorText(result), "error");
-          await refresh();
+          if (!result.ok) {
+            toast(PIG.errorText(result), "error");
+            await refresh();
+            return;
+          }
+          if (!checked || !file.insideSubmodule) {
+            await refresh();
+            return;
+          }
+          // Staging a submodule records which commit it points at; anything
+          // uncommitted inside it stays, so the row comes back unchecked. Say
+          // which of the two happened rather than letting the checkbox look
+          // broken — the first case means nothing at all was staged.
+          const fresh = await refresh();
+          const nowStaged = (fresh.staged ?? []).some((f) => f.path === file.path);
+          if (nowStaged) toast(t("submoduleStagedHint"), "info");
+          else toast(PIG.tf("submoduleInside", { path: file.path }), "error");
         },
       });
 
@@ -3255,8 +3276,23 @@ function markSubmodule(hunk) {
         h("span", { class: "status-cell", style: { color: statusColor(file.status) }, text: file.status === "?" ? "?" : file.status }),
         h("span", { class: "name", style: { color: statusColor(file.status) }, text: name }),
         directory ? h("span", { class: "path", text: directory }) : null,
+        // A submodule deserves a visible mark: its checkbox means something
+        // different from every other row's.
+        file.submodule
+          ? h("span", {
+            class: "badge",
+            text: t("submoduleBadge"),
+            title: submoduleTooltip(file),
+          })
+          : null,
       ]);
       return row;
+    }
+
+    /** Why a submodule row behaves differently, in the user's language. */
+    function submoduleTooltip(file) {
+      if (file.insideSubmodule) return PIG.tf("submoduleInside", { path: file.path });
+      return t("submoduleStagedHint");
     }
 
     function paintChanges() {
@@ -3866,7 +3902,7 @@ function markSubmodule(hunk) {
         state.repo = null;
         state.error = result.message ?? t("notARepository");
         paintAll();
-        return;
+        return state.repo ?? {};
       }
       state.repo = result;
       state.error = null;
@@ -3884,6 +3920,7 @@ function markSubmodule(hunk) {
       }
       paintAll();
       await loadDiff();
+      return result;
     }
 
     async function loadPrefs() {
