@@ -635,11 +635,18 @@
       return null;
     }
 
+    /**
+     * Say what actually went wrong. A permission that was never granted is not
+     * the same as having no provider configured, and telling the user to add
+     * one they already have sends them the wrong way.
+     */
     function draftError(result) {
-      if (result?.code === "NO_MODEL") return t("noModel");
-      if (result?.code === "RATE_LIMITED") return t("rateLimited");
-      if (result?.code === "EMPTY_DIFF" || result?.code === "NO_DIFF") return t("nothingToDescribe");
-      if (result?.code === "TIMEOUT") return t("draftTimeout");
+      const code = String(result?.code ?? "");
+      if (code === "PERMISSION_DENIED") return t("modelPermission");
+      if (code === "NO_MODEL") return t("noModel");
+      if (code === "RATE_LIMITED") return t("rateLimited");
+      if (code === "EMPTY_DIFF" || code === "NO_DIFF") return t("nothingToDescribe");
+      if (code === "TIMEOUT") return t("draftTimeout");
       return PIG.errorText(result);
     }
 
@@ -692,7 +699,18 @@
         { type: "label", label: t("modelLabel") },
       ];
       if (!models.length) {
-        items.push({ label: t("noModel"), disabled: true, title: result.message ?? "" });
+        // A menu row needs a label, not a paragraph; the full explanation is a
+        // toast away, and the host's own wording stays in the tooltip.
+        items.push({
+          label: result.code === "PERMISSION_DENIED" ? t("modelPermissionShort") : t("noModel"),
+          disabled: true,
+          title: result.code === "PERMISSION_DENIED"
+            ? `${t("modelPermission")}\n\n${result.message ?? ""}`.trim()
+            : (result.message ?? ""),
+          onSelect: result.code === "PERMISSION_DENIED"
+            ? () => toast(t("modelPermission"), "error")
+            : undefined,
+        });
       } else {
         for (const model of models.slice(0, 30)) {
           items.push({

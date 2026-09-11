@@ -457,24 +457,40 @@ async function buildCommitContext(repo, payload) {
 }
 
 /**
+ * The models the host is willing to expose, or a reason it would not.
+ *
+ * A failure here used to be reported as "no model configured" whoever was at
+ * fault — including a permission that was never granted. That told the user to
+ * go and add a provider they already had, which is worse than saying nothing.
+ * Callers now get the distinction: `code` is the host's own error code.
+ */
+async function listModels() {
+  let models;
+  try {
+    models = await pi.models.list();
+  } catch (error) {
+    return {
+      ok: false,
+      code: String(error?.code ?? "MODEL_LIST_FAILED"),
+      message: String(error?.message ?? error),
+      models: [],
+    };
+  }
+  if (!Array.isArray(models) || !models.length) {
+    return { ok: false, code: "NO_MODEL", message: "No model is available.", models: [] };
+  }
+  return { ok: true, models };
+}
+
+/**
  * Draft a message for the current selection, or for everything staged when
  * nothing is selected. `text` carries the draft; `message` stays what it is
  * everywhere else in this file — the error text.
  */
 async function draftCommitMessage(repo, payload) {
-  let models = [];
-  try {
-    models = await pi.models.list();
-  } catch (error) {
-    return { ok: false, code: "NO_MODEL", message: String(error?.message ?? error) };
-  }
-  if (!Array.isArray(models) || !models.length) {
-    return {
-      ok: false,
-      code: "NO_MODEL",
-      message: "No model is available. Add an AI provider in Settings → AI providers first.",
-    };
-  }
+  const listing = await listModels();
+  if (!listing.ok) return listing;
+  const models = listing.models;
 
   const wanted = String(payload?.modelKey ?? "").trim();
   const model = models.find((row) => row.key === wanted) ?? models[0];
@@ -1236,12 +1252,9 @@ async function onPanelInvoke(channel, payload = {}) {
     // -- misc ---------------------------------------------------------------
     // -- commit message drafting ---------------------------------------------
     case "git/models": {
-      try {
-        const models = await pi.models.list();
-        return { ok: true, models, preferred: (await readPrefs()).ui?.commitModelKey ?? "" };
-      } catch (error) {
-        return { ok: false, code: "NO_MODEL", message: String(error?.message ?? error), models: [] };
-      }
+      const listing = await listModels();
+      if (!listing.ok) return listing;
+      return { ok: true, models: listing.models, preferred: (await readPrefs()).ui?.commitModelKey ?? "" };
     }
 
     case "git/commit-message":

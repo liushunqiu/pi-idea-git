@@ -280,6 +280,36 @@ const { text, modelKey, usage } = await pi.agent.complete({
 （`MAX_COMPLETES_PER_WINDOW`），超时 90 秒；`includeSessionContext` 只有
 "正在执行工具"时可用，面板里拿不到会话上下文。官方 `pi.advisor` 插件是现成范例。
 
+## 5h. 别把不同的失败合并成同一句用户提示
+
+**实例**：生成提交信息时提示「没有可用模型。请先在设置里添加服务」，但用户明明配了
+很多模型。真因是**权限从未授上**——日志里写得明明白白：
+
+```
+{"pluginId":"local.pi-idea-git","api":"models.list","ok":false,"errorCode":"PERMISSION_DENIED"}
+```
+
+而我的代码是：
+
+```js
+try { models = await pi.models.list(); }
+catch (error) { return { ok: false, code: "NO_MODEL", message: ... }; }   // ← 吞掉了 code
+if (!models.length) return { ok: false, code: "NO_MODEL", message: "No model..." };
+```
+
+**两种完全不同的故障被压成同一个 `NO_MODEL`**，视图再把它渲染成"去添加服务"。
+用户于是被指去修一个根本没坏的东西——**比不报错更糟**。
+
+**正确做法**：
+1. **保留宿主给的错误码**（`error.code`，插件进程侧由 `settle()` 从
+   `message.error.code` 灌入），不要统一成自己的码。
+2. 引擎返回结构化的码/字段，**视图负责措辞**——不同码给不同出路。
+3. 兜底时也要把**原始报错**留在可达的地方（本项目放在菜单项 tooltip），
+   便于事后定位。
+
+**推论（通用）**：任何 `catch` 都要问一句"这里是不是把 A 故障说成了 B 故障"。
+把"权限不足""没配置""远端不可达"合并成一句笼统提示，就是在制造误导。
+
 ## 6. `.git/` 在凭据拒绝清单里
 
 宿主 fs 通道的硬拒绝列表包含 `.git/`、`.env*`、`.ssh/`、`.aws/`、`*.pem`。

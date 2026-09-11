@@ -56,6 +56,12 @@ const pi = {
   models: {
     list: async () => {
       const raw = process.env.PIG_FAKE_MODELS;
+      // "denied" reproduces what the host does when the permission is missing.
+      if (raw === "denied") {
+        const error = new Error("PERMISSION_DENIED: models.list");
+        error.code = "PERMISSION_DENIED";
+        throw error;
+      }
       if (!raw || raw === "none") return [];
       try {
         return JSON.parse(raw);
