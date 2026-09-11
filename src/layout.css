@@ -1,0 +1,208 @@
+/*
+ * Layout on top of the palette: scrollbars, resizers, the Log tab's pane grid
+ * and the affordances that only exist once the panel gets narrow.
+ */
+
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  border: 2px solid transparent;
+  border-radius: 6px;
+  background: color-mix(in oklab, var(--fg) 22%, transparent);
+  background-clip: content-box;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: color-mix(in oklab, var(--fg) 38%, transparent);
+  background-clip: content-box;
+}
+
+::-webkit-scrollbar-corner {
+  background: transparent;
+}
+
+/* ------------------------------------------------------------------- panes */
+
+/* A vertical splitter that is only visible while hovered or dragged, so the
+   surface keeps IDEA's flat look at rest. */
+.splitter-y {
+  flex: 0 0 auto;
+  height: 5px;
+  margin: -2px 0;
+  z-index: 4;
+  background: transparent;
+  cursor: row-resize;
+}
+
+.splitter-y:hover,
+.splitter-y.active {
+  background: var(--button-primary-bg);
+}
+
+.log-panes {
+  display: flex;
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+.log-panes > .branches-pane {
+  flex: 0 0 auto;
+  width: var(--branches-width, 168px);
+}
+
+.log-panes > .commits-pane {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+}
+
+.log-detail {
+  display: flex;
+  flex: 0 0 auto;
+  flex-direction: column;
+  min-height: 0;
+  height: var(--detail-height, 46%);
+}
+
+.log-detail > .changed-files {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: auto;
+}
+
+.log-detail > .details-pane {
+  flex: 0 0 auto;
+  max-height: 45%;
+  overflow: auto;
+  border-top: 1px solid var(--border-soft);
+}
+
+/* Keep the commit list readable when the pane is narrow: the meta line wraps
+   away before the subject does. */
+@media (max-width: 560px) {
+  /* Wrap the author/date/hash line instead of clipping it. */
+  .log-meta-line {
+    flex-wrap: wrap;
+    gap: 4px 8px;
+  }
+
+  /* Shrink the branches pane rather than dropping it: IDEA always shows it,
+     and the Graph Options menu can still hide it on demand. */
+  .log-panes > .branches-pane {
+    width: 128px;
+  }
+}
+
+.commit-view {
+  display: flex;
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+.commit-changes {
+  display: flex;
+  flex: 0 0 auto;
+  flex-direction: column;
+  width: var(--changes-width, 45%);
+  min-width: 140px;
+  min-height: 0;
+}
+
+.commit-diff {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+}
+
+/* Narrow work panels read better stacked than side by side. */
+@media (max-width: 480px) {
+  .commit-view {
+    flex-direction: column;
+  }
+
+  .commit-changes {
+    width: auto;
+    max-height: 45%;
+  }
+
+  .commit-view > .divider-v {
+    display: none;
+  }
+}
+
+.branch-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  max-width: 220px;
+  padding: 2px 6px;
+  border: 1px solid transparent;
+  border-radius: var(--radius);
+  cursor: pointer;
+  user-select: none;
+}
+
+.branch-chip:hover {
+  border-color: var(--button-border);
+  background: var(--button-bg);
+}
+
+.branch-chip .name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 600;
+}
+
+.branch-chip .tracking {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  color: var(--fg-muted);
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+.ahead {
+  color: var(--status-added);
+}
+
+.behind {
+  color: var(--status-modified);
+}
+
+:root[data-theme="dark"] .behind {
+  color: var(--status-modified);
+}
+
+.hidden {
+  display: none !important;
+}
+
+.muted {
+  color: var(--fg-muted);
+}
+
+.mono {
+  font-family: var(--mono-font);
+}
+
+.nowrap {
+  white-space: nowrap;
+}
+
+.grow {
+  flex: 1 1 auto;
+  min-width: 0;
+}

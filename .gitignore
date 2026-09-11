@@ -1,0 +1,12 @@
+# PluginPack output
+dist/
+*.piplug
+
+# Scratch pages produced while smoke-testing a view
+.smoke/
+
+# Dependencies, should any ever be added
+node_modules/
+
+# macOS
+.DS_Store

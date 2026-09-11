@@ -1,0 +1,84 @@
+{
+  "schemaVersion": 1,
+  "id": "local.pi-idea-git",
+  "name": "IDEA Git",
+  "version": "0.2.0",
+  "description": "An IntelliJ-IDEA-style Git tool window for PI-Desktop: staged/unstaged change lists, hunk-level stage & revert, commit, branch switcher, graph log and stashes. IDEA Git 风格的 Git 工具窗口：暂存/未暂存分组、按代码块暂存与还原、提交、分支切换、图形化日志与储藏。",
+  "author": "local",
+  "main": "main.js",
+  "ui": {
+    "panel": "renderer/index.html",
+    "title": {
+      "en": "IDEA Git",
+      "zh-CN": "IDEA Git"
+    }
+  },
+  "contributes": {
+    "views": [
+      {
+        "id": "commit",
+        "title": {
+          "en": "Commit",
+          "zh-CN": "提交"
+        },
+        "icon": "list-checks",
+        "entry": "views/commit.html",
+        "order": 33
+      },
+      {
+        "id": "git",
+        "title": {
+          "en": "Git",
+          "zh-CN": "Git"
+        },
+        "icon": "branch",
+        "entry": "views/git.html",
+        "order": 35
+      }
+    ],
+    "commands": [
+      {
+        "id": "pi-idea-git.open",
+        "title": "IDEA Git: Open as a separate window",
+        "keywords": [
+          "git",
+          "idea",
+          "commit",
+          "diff",
+          "stage"
+        ]
+      },
+      {
+        "id": "pi-idea-git.refresh",
+        "title": "IDEA Git: Refresh repository",
+        "keywords": [
+          "git",
+          "refresh",
+          "reload"
+        ]
+      }
+    ]
+  },
+  "permissions": [
+    "ui.panel",
+    "ui.view",
+    "clipboard.write",
+    "fs.read"
+  ],
+  "fs": {
+    "read": {
+      "root": "workspace",
+      "scope": [
+        "**"
+      ]
+    }
+  },
+  "engines": {
+    "piDesktop": ">=0.8.0"
+  },
+  "activationEvents": [
+    "onStartup",
+    "onCommand:pi-idea-git.open",
+    "onCommand:pi-idea-git.refresh"
+  ]
+}
