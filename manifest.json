@@ -63,7 +63,9 @@
     "ui.panel",
     "ui.view",
     "clipboard.write",
-    "fs.read"
+    "fs.read",
+    "models.list",
+    "agent.complete"
   ],
   "fs": {
     "read": {

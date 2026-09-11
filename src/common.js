@@ -147,6 +147,19 @@
       submodule: "submodule",
       authSsh: "Your Git has no credential the plugin can use for this remote. It runs your own git, so configure the remote the same way your terminal does: use an HTTPS URL, or make the key work without ssh-agent (the host does not pass SSH_AUTH_SOCK, so agent-held keys cannot be unlocked). On macOS, `UseKeychain yes` in ~/.ssh/config is enough.",
       authCredentials: "No stored credential for this remote, and there is no terminal here to type one. Push once from a terminal to let your credential helper store it, then retry.",
+      generateMessage: "Generate Commit Message",
+      generating: "Generating…",
+      generateOptions: "Model and options",
+      modelLabel: "Model",
+      noModel: "No model is available. Add an AI provider in Settings → AI providers first.",
+      rateLimited: "Too many generations in a row (the host allows 8 per minute). Wait a moment and try again.",
+      nothingToDescribe: "Nothing to describe: stage a change, or select a file in the Changes list first.",
+      draftTimeout: "The model did not answer in time.",
+      replaceDraft: "Replace your draft?",
+      replaceDraftBody: "Generating a message overwrites what you have already typed.",
+      replace: "Replace",
+      draftedStaged: "Commit message drafted from everything staged",
+      draftedFile: "Commit message drafted from {{file}}",
       appShortcutHint: "The command palette belongs to the app: click back into the main window first, or press Alt+Space for the plugin launcher.",
       dropStashConfirm: "Drop this stash?",
       repositoryHint: "Open a folder that is inside a Git repository.",
@@ -283,6 +296,19 @@
       submodule: "子模块",
       authSsh: "插件用的就是你自己的 git，但这个远端没有它可用的凭据。请按你终端里的方式配好远端：改用 HTTPS 地址，或让密钥不依赖 ssh-agent（宿主不传递 SSH_AUTH_SOCK，所以放在 agent 里的密钥解不开）。macOS 上在 ~/.ssh/config 里加 `UseKeychain yes` 即可。",
       authCredentials: "这个远端没有已保存的凭据，而这里没有终端可以输入密码。请在终端里手动 push 一次，让凭据助手把它存下来，然后再重试。",
+      generateMessage: "生成提交信息",
+      generating: "生成中…",
+      generateOptions: "模型与选项",
+      modelLabel: "模型",
+      noModel: "没有可用模型。请先在「设置 → AI 服务」中添加服务。",
+      rateLimited: "连续生成次数过多（宿主限制每分钟 8 次）。请稍等片刻再试。",
+      nothingToDescribe: "没有可描述的内容：请先暂存改动，或在变更列表里选中一个文件。",
+      draftTimeout: "模型未在规定时间内返回。",
+      replaceDraft: "替换当前草稿？",
+      replaceDraftBody: "生成会覆盖你已经输入的内容。",
+      replace: "替换",
+      draftedStaged: "已生成提交信息（来源：全部已暂存内容）",
+      draftedFile: "已生成提交信息（来源：{{file}}）",
       appShortcutHint: "命令面板由宿主提供，需先点回主窗口；或在视图内按 Alt+Space 打开插件启动器。",
       diff: "差异",
       dropStashConfirm: "删除该储藏？",
@@ -304,6 +330,17 @@
   function t(key) {
     const table = STRINGS[state.locale] ?? STRINGS.en;
     return table[key] ?? STRINGS.en[key] ?? key;
+  }
+
+  /**
+   * Same lookup, with `{{name}}` placeholders filled in. Whole sentences belong
+   * in one key: gluing a translation together from fragments is how you get
+   * grammar that reads like a machine wrote it.
+   */
+  function tf(key, vars) {
+    return t(key).replace(/\{\{(\w+)\}\}/g, (match, name) => (
+      vars && vars[name] !== undefined ? String(vars[name]) : match
+    ));
   }
 
   // -------------------------------------------------------------- bridge ---
@@ -392,6 +429,8 @@
     arrowUp: [["path", { d: "M8 13V3.6" }], ["path", { d: "M4.8 6.8 8 3.6l3.2 3.2" }]],
     arrowDown: [["path", { d: "M8 3v9.4" }], ["path", { d: "M4.8 9.2 8 12.4l3.2-3.2" }]],
     warning: [["path", { d: "M8 2.4 14.4 13.6H1.6z" }], ["path", { d: "M8 6.2v3.4" }], ["circle", { cx: 8, cy: 11.6, r: 0.7 }]],
+    // Two sparkles: the conventional mark for "let the model draft this".
+    sparkles: [["path", { d: "M6.4 2.2 7.7 5.5l3.3 1.3-3.3 1.3L6.4 11.4 5.1 8.1 1.8 6.8l3.3-1.3z" }], ["path", { d: "M12.2 9.6l.6 1.6 1.6.6-1.6.6-.6 1.6-.6-1.6-1.6-.6 1.6-.6z" }]],
   };
 
   function icon(name, size) {
@@ -563,6 +602,12 @@
    */
   function popup(anchor, items, options) {
     closePopup();
+    // A missing anchor means the caller read `event.currentTarget` after an
+    // await, where it is null. Complain loudly instead of appending a menu that
+    // would never be tracked — and therefore never removed.
+    if (!anchor || typeof anchor.getBoundingClientRect !== "function") {
+      throw new Error("popup() needs a live anchor element; capture it before any await");
+    }
     const menu = h("div", { class: "popup", role: "menu" });
     for (const item of items ?? []) {
       if (!item) continue;
@@ -593,6 +638,7 @@
       );
     }
     document.body.append(menu);
+    openPopup = menu;
     const rect = anchor.getBoundingClientRect();
     const width = menu.offsetWidth;
     const height = menu.offsetHeight;
@@ -607,7 +653,6 @@
       const first = menu.querySelector("button:not([disabled]), input");
       first?.focus();
     }
-    openPopup = menu;
     document.addEventListener("pointerdown", onPopupPointerDown, true);
     document.addEventListener("keydown", onPopupKeyDown, true);
     return menu;
@@ -836,6 +881,7 @@
   Object.assign(PIG, {
     state,
     t,
+    tf,
     invoke,
     copyText,
     h,

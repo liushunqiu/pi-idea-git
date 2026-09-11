@@ -242,6 +242,44 @@ hint: Use -f if you really want to add them.
 **教训**：不是所有 git 报错都是"一行一个意思"。取错误信息要么取全文，
 要么按命令定制，别默认只取首行。
 
+## 5f. DOM 事件里的 `event.currentTarget` 在 `await` 之后是 null
+
+**症状**：每次点击某个按钮都会在页面里**多留一个弹层**（DOM 里堆叠，视觉上只看到
+最上面那个，所以完全不像 bug）。点三次就有三个。
+
+**根因**：把 `event` 传进一个 `async` 函数、在 `await` 之后才读
+`event.currentTarget` —— **该属性只在事件派发的同步阶段有效，之后是 `null`**。
+于是弹出层已经被 `append` 进 DOM，但紧接着用 null 锚点算位置时抛异常，
+**登记弹层的赋值语句永远没执行到**，于是它既不在管理列表里、也永远不会被关闭。
+
+**为什么难查**：异常被 `onclick` 里的 `.catch(() => {})` 吞掉，控制台干净；
+`window.addEventListener("error")` 也收不到（是 Promise 拒绝，不是错误事件）。
+
+**两条教训**：
+1. 调用方：**在 `await` 之前把元素取出来**（`onclick: (e) => fn(e.currentTarget)`），
+   不要把 `event` 带进异步函数。
+2. 被调用方：**先登记、再做可能抛异常的事**；并在入口校验锚点，坏锚点就明确报错，
+   而不是留下一个永远关不掉的孤儿节点。改了 `popup()` 的顺序后这类泄漏就不可能再发生。
+
+## 5g. 用宿主模型生成文本：`agent.complete`
+
+插件**不需要也不该持有 API key**。要生成文本时用宿主的模型：
+
+```js
+const models = await pi.models.list();          // 需要 models.list 权限
+// [{ key: "providerId/modelId", label, providerName, ... }]
+const { text, modelKey, usage } = await pi.agent.complete({
+  modelKey,                                     // 必填，必须含 "/"
+  system: "...",                                // 可选，≤32 KiB
+  messages: [{ role: "user", content: "..." }], // 合计 ≤200k 字符
+  // thinkingLevel, includeSessionContext（后者还需 session.read 且在工具执行中）
+});
+```
+
+要点：`agent.complete` 是**高风险权限**；宿主限流 **8 次 / 60 秒**
+（`MAX_COMPLETES_PER_WINDOW`），超时 90 秒；`includeSessionContext` 只有
+"正在执行工具"时可用，面板里拿不到会话上下文。官方 `pi.advisor` 插件是现成范例。
+
 ## 6. `.git/` 在凭据拒绝清单里
 
 宿主 fs 通道的硬拒绝列表包含 `.git/`、`.env*`、`.ssh/`、`.aws/`、`*.pem`。

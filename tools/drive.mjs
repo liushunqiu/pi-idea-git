@@ -47,6 +47,43 @@ const pi = {
   ui: { openPanel: async () => {}, showToast: () => {} },
   plugin: { getDataPath: async () => process.env.TMPDIR ?? "/tmp" },
   events: { on: () => {}, off: () => {} },
+  // Model access is stubbed: `pi.models.list` and `pi.agent.complete` are host
+  // services, and this script runs outside the host. Everything else here —
+  // every git invocation — is real. Drive them with:
+  //   PIG_FAKE_MODELS='[{"key":"p/m","label":"m"}]'   (or "none")
+  //   PIG_FAKE_COMPLETE='the message' | 'RATE_LIMITED' | 'error:boom'
+  //   PIG_SHOW_PROMPT=1  to print what would have been sent
+  models: {
+    list: async () => {
+      const raw = process.env.PIG_FAKE_MODELS;
+      if (!raw || raw === "none") return [];
+      try {
+        return JSON.parse(raw);
+      } catch {
+        return [];
+      }
+    },
+  },
+  agent: {
+    complete: async (input) => {
+      if (process.env.PIG_SHOW_PROMPT === "1") {
+        process.stderr.write(`\n--- system ---\n${input.system ?? ""}\n--- messages ---\n`
+          + (input.messages ?? []).map((m) => `[${m.role}]\n${m.content}`).join("\n") + "\n--- end ---\n\n");
+      }
+      const reply = process.env.PIG_FAKE_COMPLETE ?? "draft from stub";
+      if (reply === "RATE_LIMITED") {
+        const error = new Error("advisor complete rate exceeded");
+        error.code = "RATE_LIMITED";
+        throw error;
+      }
+      if (reply.startsWith("error:")) {
+        const error = new Error(reply.slice("error:".length));
+        error.code = "FAILED";
+        throw error;
+      }
+      return { text: reply, modelKey: input.modelKey, usage: { inputTokens: 0, outputTokens: 0 } };
+    },
+  },
 };
 globalThis.pi = pi;
 

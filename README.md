@@ -27,6 +27,7 @@ workflow.
 | --- | --- | --- |
 | `Staged` / `Unstaged` / `Unversioned Files` / `Merge Conflicts` | Commit → Changes area | Checkbox per file. Checking an unstaged file stages it; unchecking a staged file unstages it — IDEA's "include in this commit" mapped onto a real index |
 | `Commit Message` + `Commit message history` | Commit → bottom | The clock button replays earlier messages, newest first, persisted across restarts |
+| `Generate Commit Message` | Commit → bottom | Drafts the message with the host's own model. Describes the selected file, or everything staged when nothing is selected; the chevron picks which model |
 | `Amend`, `Sign-off commit` | Commit → bottom | `--amend`, `--signoff` |
 | `Commit`, `Commit and Push` | Commit → bottom | Split button; the dropdown also carries Amend / Sign-off / Move all out of the index |
 | `Include into commit` per hunk | Commit → diff pane | **Partial commit.** Each hunk carries a checkbox; toggling it runs `git apply --cached` (or `-R`) with a rebuilt patch, so only the chosen hunks enter the commit |
@@ -116,12 +117,39 @@ partial selection.
 | `ui.view` | the two docked views |
 | `clipboard.write` | `Copy Revision Number`, copy path |
 | `fs.read` | `Open File` and `Reveal in File Manager` for a changed file |
+| `models.list` | the model picker on the generate button |
+| `agent.complete` | drafting a commit message with the host's model |
 
 `PluginCheck` reports `clipboard.write` and `fs.read` as unused because it only
 scans `main.js`; both are called from the views over the panel bridge. The
 plugin never writes to the workspace: every file mutation goes through `git`, and
 the one place that deletes a file (discarding an untracked file, or reverting an
 untracked hunk) asks for confirmation first.
+
+## Generated commit messages
+
+The sparkles button next to the summary drafts the message for you. It asks the
+**host's** model through `pi.agent.complete`, so it uses whatever provider,
+model and quota you already have configured — the plugin holds no API key and
+adds no account.
+
+What it sends is the change itself plus a sample of the repository's recent
+commit subjects, so the draft matches the project's own tone and language
+rather than an invented one. The diff is capped at 12 000 characters: it is a
+prompt, not a backup.
+
+**Scope.** With a file selected in the Changes list it describes *that file*;
+with nothing selected it describes *everything staged*. Which one it used is
+reported in the toast, so the scope is never a guess. If neither exists it says
+so instead of inventing a message.
+
+**The draft is a draft.** It lands in the message field, editable as usual. If
+you had already typed something, it asks before replacing it.
+
+Permissions: `models.list` (to offer the model picker) and `agent.complete`
+(high risk — it spends your model quota). The host rate-limits this to **8
+generations per minute**; the plugin reports that limit rather than retrying
+blindly.
 
 ## Authentication
 

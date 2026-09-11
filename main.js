@@ -349,6 +349,165 @@ function authHint(stderr) {
 }
 
 // ---------------------------------------------------------------------------
+// Commit-message drafting
+// ---------------------------------------------------------------------------
+
+/**
+ * The message is written by the host's own model, through `pi.agent.complete`.
+ * The plugin holds no API key and picks no provider: the user's configured
+ * models are whatever `pi.models.list()` reports, which is exactly the set they
+ * already pay for.
+ */
+
+/** Enough history for the model to copy the repository's conventions. */
+const STYLE_SAMPLE_COMMITS = 20;
+/** The patch is a prompt, not a backup: keep it small enough to stay quick. */
+const MAX_PROMPT_PATCH_CHARS = 12_000;
+
+const COMMIT_SYSTEM = [
+  "You write Git commit messages.",
+  "Reply with the commit message only: no preamble, no explanation, no code fences, no surrounding quotes.",
+  "First line: imperative mood, at most 72 characters, no trailing full stop.",
+  "If the change needs it, add a blank line and a short body saying why the change was made; do not restate the diff line by line.",
+  "Write in the same language as the commit subjects you are given.",
+  "When the change is trivial and self-evident, one subject line is enough.",
+].join(" ");
+
+/** Strip the shapes a model adds around a message even when told not to. */
+function tidyCommitMessage(raw) {
+  let text = String(raw ?? "").trim();
+  const fence = /^```[a-zA-Z]*\n([\s\S]*?)\n?```$/.exec(text);
+  if (fence) text = fence[1].trim();
+  text = text.replace(/^(commit message|提交信息)\s*[:：]\s*/i, "");
+  return text.replace(/\s+$/, "");
+}
+
+/**
+ * What the model gets to read: the change, plus a sample of the repository's
+ * own subjects so it can match tone and language instead of inventing a style.
+ */
+async function buildCommitContext(repo, payload) {
+  const path = typeof payload?.path === "string" && payload.path.trim() ? payload.path.trim() : null;
+  const mode = payload?.mode === "index" ? "index" : "worktree";
+
+  // The caller passes repository-relative paths; only paths that stay inside
+  // the repository are accepted, the same rule the staging channels use.
+  if (path && !isSafePath(path)) {
+    return { ok: false, code: "BAD_PATH", message: "Unsafe path rejected." };
+  }
+
+  const style = await runGit(
+    ["log", `-${STYLE_SAMPLE_COMMITS}`, "--pretty=format:%s"],
+    { cwd: repo.root },
+  );
+  const styleLines = style.ok ? style.stdout.split("\n").filter((line) => line.trim()) : [];
+
+  let patch = "";
+  let scope = "";
+  let files = [];
+
+  if (path) {
+    const diff = await readDiff(repo, path, mode, false);
+    if (!diff.ok) return { ok: false, code: "NO_DIFF", message: diff.message ?? "No changes to describe." };
+    patch = diff.text;
+    scope = { kind: "file", path, mode };
+    files = [path];
+  } else {
+    const diff = await runGit(
+      // `--no-prefix` only trims a/ and b/ noise out of the prompt; this text is
+      // never fed back to `git apply`.
+      ["diff", "--cached", "--no-color", "--no-ext-diff", "--no-prefix", "-U3"],
+      { cwd: repo.root },
+    );
+    if (!diff.ok) return { ok: false, code: "NO_DIFF", message: diff.message ?? "No changes to describe." };
+    patch = diff.stdout;
+    scope = { kind: "staged" };
+    const names = await runGit(["diff", "--cached", "--name-only"], { cwd: repo.root });
+    files = names.ok ? names.stdout.split("\n").filter((line) => line.trim()) : [];
+  }
+
+  if (!patch.trim()) {
+    return {
+      ok: false,
+      code: "EMPTY_DIFF",
+      message: path
+        ? `No changes to describe for ${path}.`
+        : "Nothing is staged. Stage the change first, or select a file in the Changes list.",
+    };
+  }
+
+  // The prompt describes the scope in prose; the caller gets the structure above
+  // and phrases it in the user's language.
+  const scopeLabel = scope.kind === "staged"
+    ? "everything currently staged"
+    : `${mode === "index" ? "staged" : "working tree"} file ${path}`;
+
+  const truncated = patch.length > MAX_PROMPT_PATCH_CHARS;
+  const body = [
+    styleLines.length
+      ? `Recent commit subjects in this repository, for style and language:\n${styleLines.join("\n")}`
+      : "This repository has no commit history yet.",
+    "",
+    `Changes to describe (${scopeLabel}):`,
+    truncated ? patch.slice(0, MAX_PROMPT_PATCH_CHARS) : patch,
+    truncated ? "\n[diff truncated]" : "",
+  ].join("\n");
+
+  return { ok: true, content: body, scope, files };
+}
+
+/**
+ * Draft a message for the current selection, or for everything staged when
+ * nothing is selected. `text` carries the draft; `message` stays what it is
+ * everywhere else in this file — the error text.
+ */
+async function draftCommitMessage(repo, payload) {
+  let models = [];
+  try {
+    models = await pi.models.list();
+  } catch (error) {
+    return { ok: false, code: "NO_MODEL", message: String(error?.message ?? error) };
+  }
+  if (!Array.isArray(models) || !models.length) {
+    return {
+      ok: false,
+      code: "NO_MODEL",
+      message: "No model is available. Add an AI provider in Settings → AI providers first.",
+    };
+  }
+
+  const wanted = String(payload?.modelKey ?? "").trim();
+  const model = models.find((row) => row.key === wanted) ?? models[0];
+
+  const context = await buildCommitContext(repo, payload);
+  if (!context.ok) return context;
+
+  try {
+    const result = await pi.agent.complete({
+      modelKey: model.key,
+      system: COMMIT_SYSTEM,
+      messages: [{ role: "user", content: context.content }],
+    });
+    const text = tidyCommitMessage(result?.text);
+    if (!text) return { ok: false, code: "EMPTY_REPLY", message: "The model returned nothing." };
+    return {
+      ok: true,
+      text,
+      modelKey: result?.modelKey ?? model.key,
+      scope: context.scope,
+      files: context.files,
+    };
+  } catch (error) {
+    // The host reports these as codes; keep them so the view can phrase them.
+    return {
+      ok: false,
+      code: String(error?.code ?? "FAILED"),
+      message: String(error?.message ?? error),
+    };
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Workspace and repository
 // ---------------------------------------------------------------------------
 
@@ -1075,6 +1234,19 @@ async function onPanelInvoke(channel, payload = {}) {
     }
 
     // -- misc ---------------------------------------------------------------
+    // -- commit message drafting ---------------------------------------------
+    case "git/models": {
+      try {
+        const models = await pi.models.list();
+        return { ok: true, models, preferred: (await readPrefs()).ui?.commitModelKey ?? "" };
+      } catch (error) {
+        return { ok: false, code: "NO_MODEL", message: String(error?.message ?? error), models: [] };
+      }
+    }
+
+    case "git/commit-message":
+      return withRepo((repo) => draftCommitMessage(repo, payload));
+
     // -- commit-level actions (Log) ------------------------------------------
     case "git/cherry-pick":
     case "git/revert": {

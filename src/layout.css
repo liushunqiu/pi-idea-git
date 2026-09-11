@@ -206,3 +206,15 @@
   flex: 1 1 auto;
   min-width: 0;
 }
+
+/*
+ * The commit-actions row carries the checkboxes, the summary, the generate
+ * control, the branch, and the commit buttons. On a narrow work panel that is
+ * more than fits, and the generate button is the one whose meaning survives
+ * losing its label — the sparkles and the tooltip still say it.
+ */
+@media (max-width: 560px) {
+  .gen-label {
+    display: none;
+  }
+}

@@ -271,6 +271,8 @@
       collapsed: new Set(),
       filter: "",
       changesWidth: 45,
+      generating: false,
+      commitModelKey: "",
     };
 
     const branchHolder = h("div", { style: { display: "contents" } });
@@ -290,6 +292,23 @@
     // A bordered (not primary) menu half keeps the split button readable while
     // the Commit half is disabled for a missing message.
     const commitMenuButton = h("button", { class: "bordered icon", type: "button", "aria-label": t("commitAndPush"), title: t("commitAndPush"), onclick: openCommitMenu }, [icon("chevronDown", 13)]);
+    // Drafting a message takes a round trip, so the control reports its own
+    // state rather than leaving the click looking ignored.
+    const generateButton = h("button", {
+      class: "bordered",
+      type: "button",
+      onclick: () => { generate().catch(() => {}); },
+    }, [icon("sparkles", 13), h("span", { class: "gen-label", text: t("generateMessage") })]);
+    const generateMenuButton = h("button", {
+      class: "bordered icon",
+      type: "button",
+      "aria-label": t("generateOptions"),
+      // The element is captured here on purpose: `event.currentTarget` is dead
+      // by the time the model list has been fetched.
+      onclick: (event) => { openGenerateMenu(event.currentTarget).catch(() => {}); },
+    }, [icon("chevronDown", 12)]);
+    const generateGroup = h("div", { class: "split-button" }, [generateButton, generateMenuButton]);
+
     const changesHeader = h("div", { class: "pane-header" });
 
     const changesWidth = h("div", { class: "commit-changes column" });
@@ -591,8 +610,108 @@
      * missing `state.diff` guard used to take the branch widget down with it.
      */
     let reportedFailure = false;
+    function paintGenerate() {
+      const busy = state.generating;
+      generateButton.disabled = busy;
+      generateMenuButton.disabled = busy;
+      PIG.clear(generateButton);
+      generateButton.append(icon("sparkles", 13));
+      generateButton.append(h("span", { class: "gen-label", text: busy ? t("generating") : t("generateMessage") }));
+      generateButton.title = PIG.state.locale === "zh-CN"
+        ? `${t("generateMessage")}（未选中文件时使用全部已暂存内容）`
+        : `${t("generateMessage")} (uses everything staged when no file is selected)`;
+    }
+
+    /**
+     * Which change the draft should describe: the file the user picked, or
+     * everything staged when the list has no selection. Reported back to them
+     * afterwards so the scope is never a guess.
+     */
+    function draftTarget() {
+      if (state.selection) {
+        const [group, ...rest] = state.selection.split(":");
+        return { path: rest.join(":"), mode: group === "staged" ? "index" : "worktree", group };
+      }
+      return null;
+    }
+
+    function draftError(result) {
+      if (result?.code === "NO_MODEL") return t("noModel");
+      if (result?.code === "RATE_LIMITED") return t("rateLimited");
+      if (result?.code === "EMPTY_DIFF" || result?.code === "NO_DIFF") return t("nothingToDescribe");
+      if (result?.code === "TIMEOUT") return t("draftTimeout");
+      return PIG.errorText(result);
+    }
+
+    async function generate() {
+      if (state.generating) return;
+      const target = draftTarget();
+      const payload = target ? { path: target.path, mode: target.mode } : {};
+      if (state.commitModelKey) payload.modelKey = state.commitModelKey;
+
+      // Never silently discard something the user typed.
+      if (state.message.trim()) {
+        const replace = await dialog({
+          title: t("replaceDraft"),
+          message: t("replaceDraftBody"),
+          confirmLabel: t("replace"),
+        });
+        if (!replace) return;
+      }
+
+      state.generating = true;
+      paintGenerate();
+      const result = await invoke("git/commit-message", payload);
+      state.generating = false;
+      paintGenerate();
+
+      if (!result.ok) {
+        toast(draftError(result), "error");
+        return;
+      }
+      state.message = result.text;
+      messageInput.value = result.text;
+      paintCommit();
+      messageInput.focus();
+      const scope = result.scope ?? {};
+      toast(
+        scope.kind === "file"
+          ? PIG.tf("draftedFile", { file: scope.path })
+          : PIG.tf("draftedStaged"),
+        "info",
+      );
+    }
+
+    async function openGenerateMenu(anchor) {
+      const result = await invoke("git/models");
+      const models = Array.isArray(result.models) ? result.models : [];
+      const selected = state.commitModelKey || models[0]?.key || "";
+      const items = [
+        { label: t("generateMessage"), onSelect: () => { generate().catch(() => {}); } },
+        { type: "separator" },
+        { type: "label", label: t("modelLabel") },
+      ];
+      if (!models.length) {
+        items.push({ label: t("noModel"), disabled: true, title: result.message ?? "" });
+      } else {
+        for (const model of models.slice(0, 30)) {
+          items.push({
+            label: model.label ?? model.key,
+            title: model.key,
+            checked: model.key === selected,
+            onSelect: () => {
+              state.commitModelKey = model.key;
+              savePrefs();
+              toast(`${t("modelLabel")}: ${model.label ?? model.key}`, "info");
+            },
+          });
+        }
+      }
+      popup(anchor, items);
+    }
+
     function paintAll() {
-      for (const step of [paintToolbar, paintChangesHeader, paintChanges, paintDiff, paintCommit]) {
+      for (const step of [paintToolbar, paintChangesHeader, paintChanges, paintDiff, paintCommit, paintGenerate]) {
         try {
           step();
         } catch (error) {
@@ -839,6 +958,7 @@
           commitUnified: state.diffUnified,
           showWhitespaces: state.showWhitespaces,
           showLineNumbers: state.showLineNumbers,
+          commitModelKey: state.commitModelKey,
         },
       }).catch(() => {});
     }
@@ -859,6 +979,7 @@
         h("label", { class: "check" }, [amendBox, t("amend")]),
         h("label", { class: "check" }, [signoffBox, t("signOff")]),
         summary,
+        generateGroup,
         h("span", { class: "spacer" }),
         h("span", { class: "commit-summary", style: { maxWidth: "40%" }, id: "commit-branch" }),
         h("div", { class: "split-button" }, [commitButton, commitMenuButton]),
@@ -908,6 +1029,7 @@
       if (typeof ui.commitUnified === "boolean") state.diffUnified = ui.commitUnified;
       if (typeof ui.showWhitespaces === "boolean") state.showWhitespaces = ui.showWhitespaces;
       if (typeof ui.showLineNumbers === "boolean") state.showLineNumbers = ui.showLineNumbers;
+      if (typeof ui.commitModelKey === "string") state.commitModelKey = ui.commitModelKey;
     }
 
     (async () => {
