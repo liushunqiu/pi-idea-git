@@ -1,0 +1,9 @@
+# Build output, not source.
+#
+# `tools/build.mjs` inlines `src/*` into these self-contained pages because the
+# host loads a view over `file://`, where Chromium refuses ES modules. They are
+# committed on purpose — the plugin needs them at load time and PluginPack ships
+# them — but they are generated, so they should not be read as the project's
+# language, and their diffs are noise in a review.
+views/*.html     linguist-generated=true linguist-detectable=false
+renderer/*.html  linguist-generated=true linguist-detectable=false
