@@ -43,6 +43,29 @@ not yet an operating-system capability sandbox"）。
 credential helper、别名）。必须自己补 `env.HOME = os.homedir()`。
 另外 `GIT_TERMINAL_PROMPT=0` 必须设，否则 push/pull 会挂死在没有终端的地方。
 
+## 3b. 插件进程也拿不到 SSH_AUTH_SOCK——认证必须靠「继承用户环境」
+
+`pluginProcessEnv()` 只透传 `PATH / SystemRoot / windir / TEMP / TMP / TMPDIR / LANG`，
+**`SSH_AUTH_SOCK` 不在其中**。而 `gitEnv()` 只是 `{...process.env}`，所以它也无从恢复。
+
+**后果**（实测）：
+
+| 认证方式 | 插件里能否工作 | 原因 |
+|---|---|---|
+| HTTPS + 凭据助手（osxkeychain / gh / libsecret / manager） | ✅ | 助手是**可执行程序**，git 通过 PATH 调起，读的是钥匙串而非环境变量 |
+| SSH + **无口令**密钥 | ✅ | ssh 直接读 `~/.ssh/id_*`（HOME 已补） |
+| SSH + macOS 钥匙串口令（`UseKeychain yes`） | ✅ | 口令从钥匙串取，不经 agent |
+| SSH + **依赖 ssh-agent** 的密钥 | ❌ | 没有 `SSH_AUTH_SOCK`，ssh 找不到 agent |
+
+**推论**：插件**不需要也不应该**自己持有凭据。正确架构是「跑用户自己的 git、
+带上用户的 HOME」，于是**自建 GitLab、Gerrit、内部 Gitea 全都零配置可用**——
+因为它们和用户终端用的是同一套凭据存储。
+
+**另一个必须做的配套**：插件没有终端，所以要显式禁掉交互提示
+（`GIT_TERMINAL_PROMPT=0`、`GIT_ASKPASS=echo`）让它**快速失败而不是挂死**。
+但这会把"没配凭据"变成一句看不懂的报错，因此要**把失败分类并给出补救说明**
+（本项目 `authHint()` 返回机器码，视图负责本地化文案）。
+
 ## 4. `git apply` 与前缀：补丁被拒的迷惑性报错
 
 **症状**：`git apply --cached` 报
