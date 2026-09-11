@@ -187,6 +187,38 @@ plugins.broadcastEvent("workspace:changed", [payload]);    // → pi.events.on�
 
 **教训**：任何"宿主状态"都当成可能变化的值；插件进程比它服务的项目活得久。
 
+## 5d. 界面传了、引擎却不接的参数（一类静默失效）
+
+**实例**：四个视图调用点都传 `setUpstream: !branch?.upstream`，但引擎的
+`git/push` 分支**只取 `remote` 和 `branch`，把 `setUpstream` 丢掉了**。
+后果：新分支首次推送不会建立跟踪，ahead/behind（`↑2 ↓1` 那个芯片）**永远不会出现**，
+而且没有任何报错——参数合法、命令成功、只是少了个 `--set-upstream`。
+
+**为什么难发现**：`git push origin main` 在无 upstream 时**也返回成功**，
+所以日志里只有成功。只有回头看"为什么 ↑↓ 一直是空的"才会起疑。
+
+**教训**：视图与引擎之间是**无类型校验的 JSON 通道**（`pluginBridge.invoke`
+→ `onPanelInvoke`），拼错的键、忘接的键都不会报错。凡是视图传了新参数，
+必须同时在引擎的 `switch` 里落地；更好的做法是把通道**契约写在一处**
+（本项目 `tools/drive.mjs` 可以直接按通道调用，是验证契约的最短路径）。
+
+## 5e. 报错只取第一行会丢关键信息
+
+**实例**：`git add` 被忽略文件挡住时，stderr 是
+
+```
+The following paths are ignored by one of your .gitignore files:
+AGENTS.local.md
+hint: Use -f if you really want to add them.
+```
+
+原来用 `firstLine(stderr)` 当错误信息，于是界面上只显示第一行
+——**"以下路径被忽略："然后就没有然后了**，用户根本不知道是哪个文件。
+已改为 `gitError()`：丢掉 `hint:` 噪音行，保留前 6 行。
+
+**教训**：不是所有 git 报错都是"一行一个意思"。取错误信息要么取全文，
+要么按命令定制，别默认只取首行。
+
 ## 6. `.git/` 在凭据拒绝清单里
 
 宿主 fs 通道的硬拒绝列表包含 `.git/`、`.env*`、`.ssh/`、`.aws/`、`*.pem`。
@@ -216,3 +248,23 @@ porcelain 契约）。
 含 `branch` / `list-checks` / `diff` / `pull-request`）。
 `contributes.commands[].title` **只接受纯字符串**（不能给本地化对象），
 而 `contributes.views[].title` 和 `ui.title` 接受本地化对象。
+
+## 本机 gitignore 会影响所有仓库（提交前必看）
+
+`~/.config/git/ignore` 里有：
+
+```
+**/.claude/settings.local.json
+AGENTS.local.md
+*.local.md
+```
+
+**注意 `AGENTS.local.md` 是被单独列出的，所以它在本机任何仓库里都不会被提交**，
+`git add -A` 会静默跳过它（只有显式 `git add AGENTS.local.md` 才报错）。
+在别的机器上（没有这条全局规则）它反而会进仓库——**同名文件的行为因机器而异**。
+如果希望它随仓库走，需要在仓库自己的 `.gitignore` 里用 `!AGENTS.local.md` 反选。
+
+## 本项目已发布到 GitHub
+
+仓库：`liushunqiu/pi-idea-git`（**private**，2026-09-11 建立）。默认分支 `main`。
+若需公开：`gh repo edit liushunqiu/pi-idea-git --visibility public --accept-visibility-change-consequences`。
