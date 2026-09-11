@@ -145,6 +145,8 @@
       incoming: "incoming commits",
       diff: "Diff",
       submodule: "submodule",
+      authSsh: "Your Git has no credential the plugin can use for this remote. It runs your own git, so configure the remote the same way your terminal does: use an HTTPS URL, or make the key work without ssh-agent (the host does not pass SSH_AUTH_SOCK, so agent-held keys cannot be unlocked). On macOS, `UseKeychain yes` in ~/.ssh/config is enough.",
+      authCredentials: "No stored credential for this remote, and there is no terminal here to type one. Push once from a terminal to let your credential helper store it, then retry.",
       appShortcutHint: "The command palette belongs to the app: click back into the main window first, or press Alt+Space for the plugin launcher.",
       dropStashConfirm: "Drop this stash?",
       repositoryHint: "Open a folder that is inside a Git repository.",
@@ -279,6 +281,8 @@
       outgoing: "待推送的提交",
       incoming: "待拉取的提交",
       submodule: "子模块",
+      authSsh: "插件用的就是你自己的 git，但这个远端没有它可用的凭据。请按你终端里的方式配好远端：改用 HTTPS 地址，或让密钥不依赖 ssh-agent（宿主不传递 SSH_AUTH_SOCK，所以放在 agent 里的密钥解不开）。macOS 上在 ~/.ssh/config 里加 `UseKeychain yes` 即可。",
+      authCredentials: "这个远端没有已保存的凭据，而这里没有终端可以输入密码。请在终端里手动 push 一次，让凭据助手把它存下来，然后再重试。",
       appShortcutHint: "命令面板由宿主提供，需先点回主窗口；或在视图内按 Alt+Space 打开插件启动器。",
       diff: "差异",
       dropStashConfirm: "删除该储藏？",
@@ -673,6 +677,20 @@
     });
   }
 
+  /**
+   * The message to show for a failed call: Git's own output plus, when the
+   * engine recognised the failure, a line saying what to do about it. Auth
+   * failures are the ones a user cannot guess their way out of.
+   */
+  function errorText(result) {
+    const message = String(result?.message ?? "").trim();
+    const hint = result?.authHint === "ssh" ? t("authSsh")
+      : result?.authHint === "credentials" ? t("authCredentials")
+        : "";
+    if (!hint) return message || "failed";
+    return message ? `${message}\n\n${hint}` : hint;
+  }
+
   // ------------------------------------------------------------ splitter ---
   /**
    * Drag handle for a two-pane layout. `apply(delta)` receives the pointer
@@ -843,6 +861,7 @@
     isMac: IS_MAC,
     formatShortcut,
     bindShortcuts,
+    errorText,
     appShortcutHintBinding,
   });
 })(window.PIG || (window.PIG = {}));

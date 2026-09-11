@@ -1585,6 +1585,8 @@ window.__PI_IDEA_GIT_SURFACE__ = "git";
       incoming: "incoming commits",
       diff: "Diff",
       submodule: "submodule",
+      authSsh: "Your Git has no credential the plugin can use for this remote. It runs your own git, so configure the remote the same way your terminal does: use an HTTPS URL, or make the key work without ssh-agent (the host does not pass SSH_AUTH_SOCK, so agent-held keys cannot be unlocked). On macOS, `UseKeychain yes` in ~/.ssh/config is enough.",
+      authCredentials: "No stored credential for this remote, and there is no terminal here to type one. Push once from a terminal to let your credential helper store it, then retry.",
       appShortcutHint: "The command palette belongs to the app: click back into the main window first, or press Alt+Space for the plugin launcher.",
       dropStashConfirm: "Drop this stash?",
       repositoryHint: "Open a folder that is inside a Git repository.",
@@ -1719,6 +1721,8 @@ window.__PI_IDEA_GIT_SURFACE__ = "git";
       outgoing: "待推送的提交",
       incoming: "待拉取的提交",
       submodule: "子模块",
+      authSsh: "插件用的就是你自己的 git，但这个远端没有它可用的凭据。请按你终端里的方式配好远端：改用 HTTPS 地址，或让密钥不依赖 ssh-agent（宿主不传递 SSH_AUTH_SOCK，所以放在 agent 里的密钥解不开）。macOS 上在 ~/.ssh/config 里加 `UseKeychain yes` 即可。",
+      authCredentials: "这个远端没有已保存的凭据，而这里没有终端可以输入密码。请在终端里手动 push 一次，让凭据助手把它存下来，然后再重试。",
       appShortcutHint: "命令面板由宿主提供，需先点回主窗口；或在视图内按 Alt+Space 打开插件启动器。",
       diff: "差异",
       dropStashConfirm: "删除该储藏？",
@@ -2113,6 +2117,20 @@ window.__PI_IDEA_GIT_SURFACE__ = "git";
     });
   }
 
+  /**
+   * The message to show for a failed call: Git's own output plus, when the
+   * engine recognised the failure, a line saying what to do about it. Auth
+   * failures are the ones a user cannot guess their way out of.
+   */
+  function errorText(result) {
+    const message = String(result?.message ?? "").trim();
+    const hint = result?.authHint === "ssh" ? t("authSsh")
+      : result?.authHint === "credentials" ? t("authCredentials")
+        : "";
+    if (!hint) return message || "failed";
+    return message ? `${message}\n\n${hint}` : hint;
+  }
+
   // ------------------------------------------------------------ splitter ---
   /**
    * Drag handle for a two-pane layout. `apply(delta)` receives the pointer
@@ -2283,6 +2301,7 @@ window.__PI_IDEA_GIT_SURFACE__ = "git";
     isMac: IS_MAC,
     formatShortcut,
     bindShortcuts,
+    errorText,
     appShortcutHintBinding,
   });
 })(window.PIG || (window.PIG = {}));
@@ -3010,7 +3029,7 @@ function markSubmodule(hunk) {
       if (result.stdout?.trim()) toast(`${action}: ${firstLine(result.stdout)}`, "info");
       return true;
     }
-    toast(`${action}: ${result?.message ?? "failed"}`, "error");
+    toast(`${action}: ${PIG.errorText(result)}`, "error");
     return false;
   }
 
@@ -3132,7 +3151,7 @@ function markSubmodule(hunk) {
           event.target.disabled = true;
           const channel = checked ? "git/stage" : "git/unstage";
           const result = await invoke(channel, { paths: [file.path] });
-          if (!result.ok) toast(result.message, "error");
+          if (!result.ok) toast(PIG.errorText(result), "error");
           await refresh();
         },
       });
@@ -3202,7 +3221,7 @@ function markSubmodule(hunk) {
               event.stopPropagation();
               const paths = files.map((file) => file.path);
               const result = await invoke(allStaged ? "git/unstage" : "git/stage", { paths });
-              if (!result.ok) toast(result.message, "error");
+              if (!result.ok) toast(PIG.errorText(result), "error");
               await refresh();
             },
           }, [icon(allStaged ? "minus" : "plus", 11)]));
@@ -3544,7 +3563,7 @@ function markSubmodule(hunk) {
       });
       state.busy = false;
       if (!result.ok) {
-        toast(result.message ?? t("commit"), "error");
+        toast(PIG.errorText(result), "error");
         paintCommit();
         return;
       }
@@ -4220,7 +4239,7 @@ function markSubmodule(hunk) {
       if (!state.selection) return;
       const result = await invoke("git/commit-diff", { hash: state.selection });
       if (!result.ok) {
-        toast(result.message, "error");
+        toast(PIG.errorText(result), "error");
         return;
       }
       const parsed = PIG.diff.parse(result.text);

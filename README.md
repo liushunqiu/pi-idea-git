@@ -123,6 +123,54 @@ plugin never writes to the workspace: every file mutation goes through `git`, an
 the one place that deletes a file (discarding an untracked file, or reverting an
 untracked hunk) asks for confirmation first.
 
+## Authentication
+
+**The plugin holds no credentials, and needs none.** It runs the user's own
+`git` with the user's own `HOME`, so it inherits exactly the setup their
+terminal already uses — the same `~/.gitconfig`, the same credential helpers,
+the same `~/.ssh/config` and keys. Whatever authenticates a `git push` in a
+shell authenticates it here, on GitHub, on a self-hosted GitLab, or anywhere
+else; there is nothing per-host to configure in the plugin.
+
+That inheritance is deliberate. A plugin cannot be trusted with a token, and a
+per-host credential form would only ever cover the hosts it knew about.
+
+The one thing the plugin cannot do is *ask*. There is no terminal behind a
+tool window, so prompts are disabled (`GIT_TERMINAL_PROMPT=0`,
+`GIT_ASKPASS=echo`) and a command fails immediately instead of hanging forever
+on a password nobody can type. When that happens the raw Git error is shown
+along with what to do about it:
+
+| Failure | What the plugin says |
+| --- | --- |
+| No stored credential (HTTPS) | run `git push` once in a terminal so the credential helper stores it, then retry |
+| `Permission denied (publickey)` | use an HTTPS remote, or make the key work without `ssh-agent` — the host passes no `SSH_AUTH_SOCK`, so agent-held keys cannot be unlocked. On macOS, `UseKeychain yes` in `~/.ssh/config` is enough |
+
+### Setup recipes
+
+**GitHub, HTTPS** — `gh auth login` then `gh auth setup-git` writes the helper
+into `~/.gitconfig`. Nothing else needed.
+
+**GitLab (any host), HTTPS** — let Git store it once:
+
+```bash
+git config --global credential.helper osxkeychain   # macOS (libsecret on Linux,
+                                                    # manager on Windows)
+git push            # enter the token once; it is stored from then on
+```
+
+A self-hosted GitLab works with no plugin-side configuration at all, because
+this is the same credential store your shell uses.
+
+**SSH** — passphrase-less keys, or a passphrase in the macOS keychain
+(`UseKeychain yes`), work as-is. Keys that live only in `ssh-agent` do not,
+because the host does not hand `SSH_AUTH_SOCK` to a plugin process; use an
+HTTPS remote for those, or add the key to the keychain.
+
+> Multi-account setups: the plugin reads whichever account your credential
+> helper resolves for that URL, so `credential.<url>.username` and
+> `includeIf "gitdir:…"` rules apply exactly as they do in a terminal.
+
 ## Colours
 
 Most of the light palette is copied from JetBrains' own documentation: the

@@ -509,7 +509,7 @@
       if (!state.selection) return;
       const result = await invoke("git/commit-diff", { hash: state.selection });
       if (!result.ok) {
-        toast(result.message, "error");
+        toast(PIG.errorText(result), "error");
         return;
       }
       const parsed = PIG.diff.parse(result.text);

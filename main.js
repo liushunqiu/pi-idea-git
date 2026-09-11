@@ -320,6 +320,34 @@ function gitError(stderr, code) {
   return lines.slice(0, 6).join("\n");
 }
 
+/**
+ * Classify an authentication failure so the views can explain it.
+ *
+ * The plugin deliberately holds no credentials: it runs the user's own `git`
+ * with the user's own `HOME`, so it inherits exactly the credential helpers,
+ * `~/.ssh/config` and keys that their terminal uses. That inheritance is the
+ * whole design — but it also means that when it is missing, the plugin has no
+ * way to ask. Prompts are disabled so a command fails fast rather than hanging
+ * with no terminal, which turns "no credential configured" into a dead end
+ * whose raw output names no remedy.
+ *
+ * Returns a stable code, never prose: the wording belongs to the views, which
+ * are the only part that knows the user's language.
+ */
+function authHint(stderr) {
+  const text = String(stderr ?? "");
+  if (!text) return null;
+  if (/Permission denied \(publickey\)|Host key verification failed|Could not read from remote repository/i.test(text)) {
+    return "ssh";
+  }
+  if (
+    /Authentication failed|could not read Username|could not read Password|terminal prompts disabled|Invalid username or token|HTTP 401|401 Unauthorized/i.test(text)
+  ) {
+    return "credentials";
+  }
+  return null;
+}
+
 // ---------------------------------------------------------------------------
 // Workspace and repository
 // ---------------------------------------------------------------------------
@@ -1022,6 +1050,8 @@ async function onPanelInvoke(channel, payload = {}) {
           stdout: result.stdout,
           stderr: result.stderr,
           message: result.ok ? undefined : result.message,
+          // Machine-readable so the views can phrase it in the user's language.
+          authHint: result.ok ? undefined : authHint(result.stderr),
         };
       });
     }

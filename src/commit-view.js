@@ -244,7 +244,7 @@
       if (result.stdout?.trim()) toast(`${action}: ${firstLine(result.stdout)}`, "info");
       return true;
     }
-    toast(`${action}: ${result?.message ?? "failed"}`, "error");
+    toast(`${action}: ${PIG.errorText(result)}`, "error");
     return false;
   }
 
@@ -366,7 +366,7 @@
           event.target.disabled = true;
           const channel = checked ? "git/stage" : "git/unstage";
           const result = await invoke(channel, { paths: [file.path] });
-          if (!result.ok) toast(result.message, "error");
+          if (!result.ok) toast(PIG.errorText(result), "error");
           await refresh();
         },
       });
@@ -436,7 +436,7 @@
               event.stopPropagation();
               const paths = files.map((file) => file.path);
               const result = await invoke(allStaged ? "git/unstage" : "git/stage", { paths });
-              if (!result.ok) toast(result.message, "error");
+              if (!result.ok) toast(PIG.errorText(result), "error");
               await refresh();
             },
           }, [icon(allStaged ? "minus" : "plus", 11)]));
@@ -778,7 +778,7 @@
       });
       state.busy = false;
       if (!result.ok) {
-        toast(result.message ?? t("commit"), "error");
+        toast(PIG.errorText(result), "error");
         paintCommit();
         return;
       }
