@@ -20,6 +20,7 @@ Status: implemented
 刷新本身（`refresh()`）加列表微暗（`.is-refreshing`，重叠刷新共用计数器，避免闪烁），慢 reload 读作加载中而不是卡死；Git 视图的 Log 刷新同样包 `refreshInner`（它的 `.commits-pane` 复用同一选择器）。
 
 4. **第二轮：剩下的改工作区动作与刷新按钮**：刷新按钮之前是唯一没转的同步按钮——现在用户点的刷新同样进 `syncing: "refresh"`（只包按钮 handler，不包 `refresh()` 本体，避免每次内部 reload 都闪按钮；键盘 ⌘R 走微暗不转按钮）。分支菜单的新建分支、仓库菜单的储藏/恢复储藏（新增 `stashing` / `unstashing` 文案）、Log 右键菜单的拣选/还原/重置（`--hard` 可重写工作树，必须有等待归属）全部 `runWithPill`；sequencer 的继续/中止有真实按钮，用 `withBusy(button, label)` 让按钮自己转（文案保留防抖动；按钮可能被随后的 `refresh()` 重建，对 detached 节点恢复是无害 no-op）。刻意没包的：tag / amend-message / 单文件 stage / console 刷新——本地瞬时操作，药丸 1.2s 反而是噪音，微暗已覆盖。
+5. **toast 搬到右上（用户拍板）**：成功 toast 原来钉在右下角，正好压住提交信息框和按钮（`[main 95dc45f] …` 这类提交输出用户下一步就要对照着看）。改到右上后只盖住只读列表几秒；进度药丸在顶部居中，两者不撞位置。
 ## 验证
 
 - `node tools/harness.mjs`：159/159 通过（引擎未动，预期如此）。

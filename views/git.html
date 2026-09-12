@@ -1171,7 +1171,12 @@ textarea {
 .toast-layer {
   position: fixed;
   right: 12px;
-  bottom: 12px;
+  /* Top-right, not bottom-right: the bottom-right is the commit area (message
+     box + buttons) in the Commit view, so a success toast landed exactly on
+     the controls the user reaches for next. Top-right only covers read-only
+     list content while it is visible. The progress pill sits top-centre, so
+     the two never overlap — see the busy-feedback agent note. */
+  top: 12px;
   z-index: 60;
   display: flex;
   flex-direction: column;
