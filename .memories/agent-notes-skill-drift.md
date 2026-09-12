@@ -32,3 +32,24 @@
    **只少 3 行**（原标题、`## 起因`/`## 目标`、`状态：implemented`）。
 2. **段落重排会让整行比对误报**：再用「去掉全部空白后 `grep -qF` 包含性」判据，把
    「换行位置变了」与「真丢事实」分开；最后对关键事实（符号名、参数、数值）逐条 `grep -c`。
+
+## 两笔提交怎么拆开：先剥离、再提交、后还原
+
+功能改动和笔记基建**交织在同一批 hunk 里**（`main.js` 那个 `+1094,229` 的大 hunk 同时含功能代码和反向索引注释；`tools/harness.mjs` 的 235 行功能测试与 16 行 notes 段也被合并成一个 hunk），所以**按 hunk 过滤分不开**。可行做法：
+
+1. 全量备份到 scratch；2. 用脚本剥掉本次基建的部分（正则删 `// Note: … 见 .agents/notes` 行 + 按标记切掉 harness 的 notes 段与 import）；3. `node tools/build.mjs` 重新生成产物；4. 提交功能那笔；5. 从备份还原；6. 提交基建那笔。
+
+**关键校验**：每笔都要能独立跑通 —— 用 `git worktree add --detach <scratch> <第一笔>` 单独检出后跑 `node tools/harness.mjs`，确认是 **134/134**（基建那笔才让它是 136）且不报模块缺失。否则 checkout 到中间那笔会 `Cannot find module './notes.mjs'`，bisect 就废了。
+
+**踩过的坑**：第一笔暂存时漏掉了 `tools/harness.mjs`（当时只想着"它是基建"），结果 235 行功能回归测试挂到了第二笔上。判据是**暂存清单要按「这个文件里有什么」而不是「这个文件的主题」来核对**；发现后 `git reset` → 只暂存 harness → `git commit --amend --no-edit` 即可修（此时第二笔还没提交）。
+
+## 决策看板（board）
+
+```sh
+node ~/.agents/skills/write-notes-like-deepseek/scripts/build-board.ts .agents/notes .smoke/board.html "IDEA Git 决策看板"
+```
+
+- 两种模式：`--init` 出 ~69KB 轻量模板（打开后点「连接本地目录」选 `.agents/notes`，之后自动热刷新）；**不带 `--init` 是打包模式**，把笔记数据内嵌成单文件（上面这条，135KB），**脱机可看、不需要目录授权**，更适合在预览面板里直接看效果。输出到 `.smoke/`（本仓库已 gitignore）。
+- 看板会按生命周期/分类出四个计数卡 + 「系统承重墙」（按**交叉引用入度**排序）。**入度来自笔记之间的相对 Markdown 链接** —— 本仓库 4 篇主题互不相干，所以稳定显示「被引用 × 0」，这是**准确信息不是 bug**；要让它有意义就得真写互链，别为了看板好看硬连。
+- 数据可在预览里直接查：`window.__INLINE_DATA__`（数组，每篇带 `problem`/`decision`/`alternatives`/`consequences`/`links`）。**四条字段非空即证明 `## 问题 / ## 决策 / ## Alternatives considered / ## 后果` 被正确抽取** —— 这是格式改写生效的端到端证据（改前按 `## 起因` 抽不出来）。
+- 抽取器**只取每节的第一段**，所以卡片摘要是「每节开头的第一句」。这是看板设计，不是缺陷。
