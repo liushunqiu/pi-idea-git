@@ -2573,15 +2573,31 @@ async function onPanelInvoke(channel, payload = {}) {
           return { ok: false, message: "Branch name contains invalid characters." };
         }
         if (startPoint === null) return { ok: false, message: "Invalid start point." };
-        const args = payload.create
+        // A remote-tracking branch (or any raw revision) cannot be "switched
+        // to": `switch` demands `--detach` for those, and `checkout` with two
+        // positionals reads the second as a pathspec — `checkout origin/main
+        // origin/main` fails with `error: pathspec 'origin/main' did not match
+        // any file(s) known to git`. Build both commands in the same shape so
+        // the fallback cannot disagree with the attempt.
+        // Note: 兜底曾经是 checkout <startPoint> <name>，切远端分支必现 pathspec 误报且吞掉 switch 的真报错（含 --detach 提示）— 见 .agents/notes/implemented/bug-fix/2026-09-12-checkout-remote-pathspec.md
+        const attempt = payload.create
           ? ["switch", "--create", name, ...(startPoint ? [startPoint] : [])]
-          : ["switch", name];
-        let result = await runGit(args, { cwd: repo.root });
-        if (!result.ok && !payload.create) {
-          // Older Git, or switching to a remote-tracking branch.
-          result = await runGit(["checkout", ...(startPoint ? [startPoint] : []), name], {
-            cwd: repo.root,
-          });
+          : startPoint
+            ? ["switch", "--detach", startPoint]
+            : ["switch", name];
+        const fallback = payload.create
+          ? ["checkout", "-b", name, ...(startPoint ? [startPoint] : [])]
+          : startPoint
+            ? ["checkout", "--detach", startPoint]
+            : ["checkout", name];
+        let result = await runGit(attempt, { cwd: repo.root });
+        if (!result.ok) {
+          // No `switch` (Git < 2.23), or `switch` refusing a real checkout.
+          // When both fail, keep the FIRST error: it names the actual cause
+          // (local changes in the way, the --detach hint), while the
+          // fallback's wording only adds confusion.
+          const second = await runGit(fallback, { cwd: repo.root });
+          if (second.ok) result = second;
         }
         return { ok: result.ok, message: result.ok ? undefined : result.message };
       });

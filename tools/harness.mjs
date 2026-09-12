@@ -394,6 +394,31 @@ async function main() {
     const missing = await call(world.work, "git/sequencer", { operation: "merge", action: "abort" });
     eq("aborting a merge that is not in progress fails", missing.ok, false);
     includes("with Git's reason", missing.message, "MERGE_HEAD");
+
+    // Checking out a remote-tracking branch detaches at it. `switch` alone
+    // refuses those ("a branch is expected"), and the old fallback answered
+    // `checkout <startPoint> <name>` — two positionals, which Git reads as
+    // tree + pathspec, so every remote checkout died with
+    // `error: pathspec 'origin/main' did not match any file(s) known to git`.
+    const detached = await call(world.work, "git/checkout", { name: "origin/main", startPoint: "origin/main" });
+    eq("checking out a remote-tracking branch succeeds", detached.ok, true);
+    eq("HEAD is detached at the remote", git(world.work, ["rev-parse", "HEAD"]).trim(), git(world.work, ["rev-parse", "origin/main"]).trim());
+    git(world.work, ["switch", "-q", "main"]);
+
+    // Move the remote on in an overlapping file, then dirty that file: the
+    // checkout is genuinely blocked, and the refusal must name the real cause
+    // instead of the fallback's pathspec complaint.
+    git(world.other, ["fetch", "-q", "origin"]);
+    git(world.other, ["reset", "-q", "--hard", "origin/main"]);
+    write(world.other, "f.txt", "theirs\n");
+    commitAll(world.other, "move the remote on");
+    git(world.other, ["push", "-q", "origin", "main"]);
+    git(world.work, ["fetch", "-q", "origin"]);
+    write(world.work, "f.txt", "dirty\n");
+    const blocked = await call(world.work, "git/checkout", { name: "origin/main", startPoint: "origin/main" });
+    eq("the blocked checkout fails", blocked.ok, false);
+    excludes("without the fallback's pathspec complaint", blocked.message, "pathspec");
+    includes("naming the file in the way", blocked.message, "f.txt");
   }
 
   // 10. A cherry-pick that conflicts can be resolved and continued from here.
