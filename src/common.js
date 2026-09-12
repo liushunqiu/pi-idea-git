@@ -1429,6 +1429,7 @@
     openPushDialog,
     pushRepos,
     bindSplitter,
+    relativeTime,
     formatDate,
     formatDateTime,
     formatClock,
