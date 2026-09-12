@@ -11,6 +11,7 @@
  * Run: node tools/build.mjs
  */
 
+// Note: 构建步骤不是可选的——视图用 file:// 加载、Chromium 拒绝 ES module，所以 src/* 必须内联成自包含页面；views/*.html 与 renderer/index.html 是产物，禁止手改 — 见 .agents/notes/implemented/architecture/2026-09-11-idea-git-tool-window.md
 import { readFileSync, writeFileSync, mkdirSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";

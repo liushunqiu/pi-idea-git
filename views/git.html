@@ -4311,6 +4311,7 @@ function markSubmodule(hunk) {
       return PIG.errorText(result);
     }
 
+    // Note: 界面语言只有视图知道（插件进程拿不到），所以 locale 随每次请求传；语言是 chevron 菜单里的显式选择而不是推断，auto 的历史回退靠引擎返回 null 而不是 "en" — 见 .agents/notes/implemented/architecture/2026-09-11-commit-message-prompt.md
     async function generate() {
       if (state.generating) return;
       const target = draftTarget();

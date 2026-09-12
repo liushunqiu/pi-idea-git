@@ -29,6 +29,7 @@
  * Git command, and hunk operations pipe a patch that Git validates itself.
  */
 
+// Note: 为什么用 Git CLI 而不是解析 .git/（宿主硬拒 .git/，porcelain 是唯一对空格/非 ASCII 路径无歧义的契约）、为什么做成两个 docked view 而不是一个、变更列表为什么按分组各自建树 — 见 .agents/notes/implemented/architecture/2026-09-11-idea-git-tool-window.md
 const { spawn } = require("node:child_process");
 const os = require("node:os");
 const path = require("node:path");
@@ -334,6 +335,7 @@ const ERROR_LINES = 6;
 /** Bounded so a runaway command cannot push megabytes through the bridge. */
 const ERROR_DETAIL_CHARS = 4000;
 
+// Note: 报错管线必须同时读 stdout 和 stderr——判据是"失败时哪一行能指出下一步"，不是"哪个流更像错误流"（push 的拒绝在 stderr，merge 的 CONFLICT 在 stdout）；hint 行从短消息里剔除、改用代码分类后的本地化补救，但完整输出仍进 detail 不丢 — 见 .agents/notes/implemented/architecture/2026-09-12-remote-sync-conflicts.md
 /**
  * Turn a failed command's output into something a person can act on.
  *
@@ -462,6 +464,7 @@ const STYLE_SAMPLE_COMMITS = 40;
 /** The diff is a prompt, not a backup: keep it small enough to stay quick. */
 const MAX_PROMPT_PATCH_CHARS = 12_000;
 
+// Note: 语言是显式参数，而不是"匹配仓库历史"推断（英文历史会稳定压过用户的界面语言）；格式类规则提示词也保证不了，必须由 formatCommitMessage 在模型输出后强制成立 — 见 .agents/notes/implemented/architecture/2026-09-11-commit-message-prompt.md
 /**
  * The instruction the model follows.
  *
@@ -812,6 +815,7 @@ function formatCommitMessage(raw) {
 /** A subject prefix (`fix(parser)!: …`) — the pattern, not its type names. */
 const SUBJECT_PREFIX = /^[a-z][a-z0-9-]*(?:\([^)\n]{1,30}\))?!?: \S/;
 
+// Note: 风格事实由插件实测，而不是让模型猜（历史语言 / 是否用 type(scope): 前缀 / 是否写正文），并由 buildCommitContext 措辞进用户消息；language 测不出来时必须是 null，折成 "en" 会让界面语言回退变成死代码 — 见 .agents/notes/implemented/architecture/2026-09-11-commit-message-prompt.md
 /**
  * What the repository's recent history says about how to write here: which
  * language it commits in, whether it prefixes its subjects, and whether anyone
@@ -1091,6 +1095,7 @@ async function refreshWorkspace() {
 // Repositories
 // ---------------------------------------------------------------------------
 
+// Note: 一个项目多个仓库做成「仓库列表 + Root 选择器」，而不是给 41 个通道加参数或每仓库一个视图；选择属于打开的那个项目（会话级、不写 prefs、工作区一变就由 refreshWorkspace 清除），因为下次打开项目该看到项目自己的仓库 — 见 .agents/notes/implemented/architecture/2026-09-12-nested-repositories.md
 /**
  * The repository the tool windows are pointed at when it is not the workspace's
  * own repository: a checked-out submodule, or a repository nested anywhere
@@ -1314,6 +1319,7 @@ async function submodulePaths(workspaceRoot, nested) {
   return submodules;
 }
 
+// Note: 发现边界（深度 4 / 5000 目录 / 跳过依赖构建缓存树）只是对项目大小的猜测，.gitmodules 声明优先于猜测；kind 由持有者 index 里的 160000 gitlink 判定，而不是 .gitmodules — 见 .agents/notes/implemented/architecture/2026-09-12-nested-repositories.md
 /**
  * Every repository the tool windows can be pointed at: the workspace's own
  * repository first, then everything nested inside it.
@@ -1351,6 +1357,7 @@ async function discoverRepositories(workspaceRoot) {
   ];
 }
 
+// Note: 「哪个仓库」只由 readRepo 决定——41 处 runGit 里只有它的 --show-toplevel 探测用默认 cwd，重定向这一个函数等于重定向整张命令表；选择每次校验、失效静默回退（回退比报错更接近用户预期），路径比较一律按 realpath（macOS /private/var 与 /var 是同一目录） — 见 .agents/notes/implemented/architecture/2026-09-12-nested-repositories.md
 /**
  * Resolve the repository the commands run against: the one the user picked in
  * the repository list, or the workspace's own repository.
@@ -1494,6 +1501,7 @@ function refArg(value) {
   return text;
 }
 
+// Note: 推送目标从 @{upstream} 解析，而不是硬编码 origin 或取 git remote 的第一个（字典序会决定分支发布到哪并顺手绑定 tracking）；没有 upstream 时只接受 origin 或唯一远端，多个远端时报错而不替用户猜 — 见 .agents/notes/implemented/architecture/2026-09-12-remote-sync-conflicts.md
 /**
  * Where a push should go.
  *
@@ -2323,6 +2331,7 @@ async function onPanelInvoke(channel, payload = {}) {
       });
     }
 
+    // Note: 推送只能走 --force-with-lease（裸 --force 会静默抹掉同事的提交）；pull 先按用户配置原样跑、只在 Git 因没策略拒绝时补一次 --no-rebase——自己读 pull.rebase/pull.ff 拼参数是 Git 优先级规则的第二个、更差的副本 — 见 .agents/notes/implemented/architecture/2026-09-12-remote-sync-conflicts.md
     case "git/push": {
       const remote = refArg(payload.remote);
       const branch = refArg(payload.branch);

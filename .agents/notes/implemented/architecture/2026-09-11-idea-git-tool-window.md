@@ -1,10 +1,11 @@
-# IDEA Git 工具窗口：实现取舍
+# Agent Note: IDEA Git 工具窗口：实现取舍
+
+Status: implemented
 
 日期：2026-09-11
-状态：implemented
 范围：`local.pi-idea-git`（PI-Desktop 插件）
 
-## 目标
+## 问题
 
 用户明确要求"效果跟 IDEA 里面的 Git 一样"。先做了一次联网规格调研（JetBrains
 官方 Help 现行版 + Wayback 旧版快照），把 IDEA 的 Commit 工具窗口（`Alt+0`）、
@@ -38,30 +39,6 @@ IDEA 在 diff 里给每个 hunk 一个"纳入本次提交"复选框。这里把�
 
 视图用 `file://` 加载，ES module 被 Chromium 拒绝。官方插件因此都是单文件
 内联。加了 `tools/build.mjs` 从 `src/*` 生成自包含页面，避免手工复制多份代码。
-
-## Alternatives considered
-
-- **换用官方 `pi.gitlens` 插件**：该插件确实存在（用户曾安装 12 分钟后卸载），
-  覆盖面也接近。放弃原因：用户明确要 IDEA 的手感，且已经卸载并搭了
-  `pi-idea-git` 脚手架；分块提交的"复选框 = 真实索引"映射是本次的核心差异点，
-  现成插件不提供。
-- **改 PI-Desktop 内核加 Git API**：需要打补丁到 `app.asar`，升级即失效，
-  且宿主明确不提供任意进程 API。放弃。
-- **用 `fs` 通道直接读 `.git/index` 与对象**：`.git/` 被硬拒绝，且要自己实现
-  index 解析、packfile 解压、diff 算法——巨大工作量换更差的正确性。放弃。
-- **只做一个自定义通道 + 前端假装暂存**：无法保证与 `git status` 一致，
-  用户一旦在终端操作就会错位。放弃。
-- **把 detach 面板也做成独立实现**：改为复用同一份 `src/*`，面板只是多一个
-  标签栏，避免三套 UI 分叉。
-- **`--no-prefix` 美化 diff 输出**：试过，`git apply` 拒绝补丁
-  （`header lacks filename information`）。改为保留默认前缀、在渲染层剥前缀。
-- **side-by-side 折行显示**：折行会破坏两栏逐行对齐，改用横向滚动整块网格。
-- **窄面板隐藏分支栏**：IDEA 始终显示分支栏，改为收窄到 128px。
-- **删除行用灰（JetBrains 官方 `#D7D6D6`）**：实测在绿色新增行旁边读作"变淡"
-  而不是"被删除"，用户也明确否掉了。改用柔红 `#f7d2d2`。
-- **深色 diff 直接套用官方深色值**：实测底色偏棕、蓝色高亮压在红行上发浑浊，
-  用户否掉。改为深色独立调色 + 高亮色跟随行的色相
-  （`--diff-fragment-deleted` / `--diff-fragment-inserted`），浅色保留官方蓝。
 
 ## 已知近似
 
@@ -133,3 +110,66 @@ IDEA 在 diff 里给每个 hunk 一个"纳入本次提交"复选框。这里把�
   让已折叠的目录跳开。
 - 筛选时分组头显示 `命中/总数`，文件夹计数仍按树内实际节点；筛选后只保留命中文件
   的祖先目录（目录链仍会紧凑合并）。
+
+## Alternatives considered
+
+- **换用官方 `pi.gitlens` 插件**：该插件确实存在（用户曾安装 12 分钟后卸载），
+  覆盖面也接近。放弃原因：用户明确要 IDEA 的手感，且已经卸载并搭了
+  `pi-idea-git` 脚手架；分块提交的"复选框 = 真实索引"映射是本次的核心差异点，
+  现成插件不提供。
+- **改 PI-Desktop 内核加 Git API**：需要打补丁到 `app.asar`，升级即失效，
+  且宿主明确不提供任意进程 API。放弃。
+- **用 `fs` 通道直接读 `.git/index` 与对象**：`.git/` 被硬拒绝，且要自己实现
+  index 解析、packfile 解压、diff 算法——巨大工作量换更差的正确性。放弃。
+- **只做一个自定义通道 + 前端假装暂存**：无法保证与 `git status` 一致，
+  用户一旦在终端操作就会错位。放弃。
+- **把 detach 面板也做成独立实现**：改为复用同一份 `src/*`，面板只是多一个
+  标签栏，避免三套 UI 分叉。
+- **`--no-prefix` 美化 diff 输出**：试过，`git apply` 拒绝补丁
+  （`header lacks filename information`）。改为保留默认前缀、在渲染层剥前缀。
+- **side-by-side 折行显示**：折行会破坏两栏逐行对齐，改用横向滚动整块网格。
+- **窄面板隐藏分支栏**：IDEA 始终显示分支栏，改为收窄到 128px。
+- **删除行用灰（JetBrains 官方 `#D7D6D6`）**：实测在绿色新增行旁边读作"变淡"
+  而不是"被删除"，用户也明确否掉了。改用柔红 `#f7d2d2`。
+- **深色 diff 直接套用官方深色值**：实测底色偏棕、蓝色高亮压在红行上发浑浊，
+  用户否掉。改为深色独立调色 + 高亮色跟随行的色相
+  （`--diff-fragment-deleted` / `--diff-fragment-inserted`），浅色保留官方蓝。
+
+## 后果
+
+**收益**
+
+- 分块提交的"复选框"直接映射真实 Git 索引：勾选 = `git apply --cached`，取消 =
+  `git apply --cached -R`；取消勾选后该块离开已暂存集合，行为与 IDEA 一致，状态
+  永远与 `git status` 一致，不做假象。
+- 在 `.git/` 被宿主文件通道挡住的条件下，`git status --porcelain=v2 -z` 提供了
+  唯一无歧义（空格/非 ASCII 路径）、且天然区分 index 与 worktree 的契约；插件主
+  进程是完整 Node 进程，`spawn` 可用。
+- 两个 docked view（Commit 与 Git）各自带图标，等价于 IDEA 的"两个工具窗口 +
+  图标"，比挤在一个视图里更接近 IDEA，也让每个视图更简单。
+- `tools/build.mjs` 从 `src/*` 生成自包含页面，避免手工复制多份代码；detach 面板
+  与主视图复用同一份 `src/*`，避免三套 UI 分叉。
+- 变更列表改为按分组各自建树、文件夹复选框级联纳入/移出后，窄面板里"文件名尾部被
+  截断、看不出归属"与"不能级联勾选"两个问题消失；级联取该子树全部文件的显式路径，
+  与单文件操作走同一条校验与同一条 `isSafePath` 通道，也避免了目录被 gitignore
+  规则意外吞掉。
+- 紧凑中间目录与 `groupByDirectory` / `compactDirs` 一起写 `prefs.json`（不写
+  工作区），切换紧凑显示不会让已折叠的目录跳开。
+
+**代价与已知上限**
+
+- 依赖用户机器上有 `git`（已实现多路径探测），且必须自己修 `HOME`——这是用 CLI
+  换掉 `.git/` 解析的固定成本。
+- 视图用 `file://` 加载、ES module 被 Chromium 拒绝，必须维护
+  `tools/build.mjs` 这一步内联构建，源码不能直接运行。
+- 与 IDEA 的落差有明文清单：没有编辑器（`Jump to Source` 落地为 `Open File` /
+  `Reveal in File Manager`）、没有 changelist / shelf、`Edit Commit Message` 只对
+  tip 可用、`Ignore whitespaces` 开启时禁用分块暂存、未跟踪文件只能整文件 `Add`。
+- 目录树的边界是刻意的：冲突分组不给复选框；复选框保持二态、不给"部分已暂存"
+  之类的新标记；折叠状态按 `分组:目录路径` 记录；筛选时分组头 `命中/总数` 与文件夹
+  计数不混用。
+
+**重访信号**
+
+- PI-Desktop 内核开放 Git API（不再需要打补丁到 `app.asar`、升级即失效），或官方
+  `pi.gitlens` 覆盖"复选框 = 真实索引"的分块提交映射时，本决定需要重审。

@@ -1,14 +1,16 @@
-# 远端冲突：把"被拒的推送"当成正常路径
+# Agent Note: 远端冲突：把"被拒的推送"当成正常路径
+
+Status: implemented
 
 日期：2026-09-12
-状态：implemented
 范围：`local.pi-idea-git` 的 `main.js`（`gitError` / `pushHint` / `pullHint` /
 `pullStrategy` / `resolvePushTarget` / `readOperation` / `git/sequencer` /
 `git/{fetch,push,pull}`）与 `src/common.js`、`src/commit-view.js`、`src/git-view.js`
 
-## 起因
+## 问题
 
 用户提问："推送时跟远端冲突了怎么处理？" 实测（`tools/drive.mjs` 对临时仓库）：
+修复前，推送被拒这条路径上没有任何一处能指出下一步，四条断点如下：
 
 1. push 被拒 → 只显示 Git 的三行输出，而 `gitError()` **丢掉所有 `hint:` 行**
    —— 被丢掉的那句正是 "use 'git pull' before pushing again"；
@@ -24,6 +26,8 @@
 结论：不是"冲突处理得不好"，是**没有冲突处理**，而且退路（pull）是断的。
 
 ## 决策
+
+以下每条都是当前代码里的已落地行为。
 
 ### 1. `gitError` 同时读两个流
 
@@ -47,16 +51,16 @@ i18n 表里（en / zh-CN 各一份），因为只有视图知道界面语言 —
 
 ### 4. `git pull` 原样跑，只在 Git 因"没策略"拒绝时重试一次
 
-第一版实现是自己读 `pull.rebase`/`pull.ff` 再拼参数。**审查推翻了它**：
-`branch.<name>.rebase` 在 Git 里的优先级高于 `pull.rebase`，合法取值还有
-`merges`/`interactive`，于是那份真值表会静默覆盖用户自己的配置（实测：
-只设 `branch.main.rebase=true` 时裸 `git pull` 变基，而插件生成了 merge commit）。
-
-现在：**先原样执行 `git pull`**；只有失败信息命中
+插件先原样执行 `git pull`；只有失败信息命中
 `Need to specify how to reconcile divergent branches` 时，才重试一次
 `git pull --no-rebase`。判据是"把 Git 自己的优先级规则当成唯一真源"——
 用户配置、`pull.ff=only`、`merges`、`interactive` 全都由第一次尝试生效；
 插件只回答 Git 拒绝回答的那一个问题。代价只在确实分叉时多一次往返。
+
+预读 `pull.rebase`/`pull.ff` 再拼参数是更差的做法（第一版实现，**审查推翻了它**）：
+`branch.<name>.rebase` 在 Git 里的优先级高于 `pull.rebase`，合法取值还有
+`merges`/`interactive`，那份真值表会静默覆盖用户自己的配置——实测：只设
+`branch.main.rebase=true` 时裸 `git pull` 变基，而插件生成了 merge commit。
 
 选 merge 作为那个答案的理由仍是"哪种结果可恢复"：merge 停下来时冲突落在
 变更列表里，插件能收尾或中止；`fatal` 则是一条死路。
@@ -85,48 +89,18 @@ unborn 分支 → 报错说还没有提交可推；否则取 `origin`，只有�
 
 ### 8. 冲突态必须有出口，且出口不能在最需要时消失
 
-第一版用 `conflicted.length > 0` 当探测门槛。**审查推翻了它（blocker）**：
-冲突被 `git add` 解决后 porcelain 就不再报 `u` 行，门槛随即失效——而"全部暂存完"
-正是 `--continue` 开始能成功的那一刻。实测（rebase 冲突中暂存）：
-`REBASE_HEAD` 仍在、`--continue` 能成功，插件却把横幅和按钮一起隐藏了，
-等于把仓库留在没有出口的状态。
-
-现在 `readOperation()` 在"有冲突 **或** 上一次探测到操作仍在进行"时才问，
-探测到 null 才停；这同时把常态刷新的开销保持为零。
+`readOperation()` 在"有冲突 **或** 上一次探测到操作仍在进行"时才问，
+探测到 null 才停；这同时把常态刷新的开销保持为零。此前的门槛是
+`conflicted.length > 0`，**审查推翻了它（blocker）**：冲突被 `git add` 解决后
+porcelain 就不再报 `u` 行，门槛随即失效——而"全部暂存完"正是 `--continue`
+开始能成功的那一刻。实测（rebase 冲突中暂存）：`REBASE_HEAD` 仍在、
+`--continue` 能成功，插件却把横幅和按钮一起隐藏了，等于把仓库留在没有出口的状态。
 
 出口本身：`git/sequencer` 只接受那四个名字与 `abort`/`continue` 两个动作（白名单），
 `continue` 走 `-c core.editor=true`（没有终端可以编辑提交信息，否则 Git 只会失败），
 merge 的 `continue` 直接拒绝——merge 是靠提交收尾的。这条是**被 4 逼出来的**：
 让 pull 能跑，就让"插件自己制造一个冲突中的 merge"从不可能变成可能，那就必须
 同时提供出口。
-
-## Alternatives considered
-
-- **只把 hint 行留在短消息里**（最小改动）。放弃：Git 的 hint 是英文且冗长，
-  六行封顶后仍会盖掉关键行；而分类后的补救说明能本地化、能只留一句。
-  折中方案（短消息不带 hint、全文进 `detail`）同时满足了"能读"和"不丢"。
-- **toast 里不显示 hint、也不做详情对话框**。放弃：那样被丢掉的信息就真的没了，
-  未分类的失败（钩子脚本自己的输出等）将无法自证。
-- **push 前自动 fetch**。放弃：把一次用户操作变成两次网络往返，慢网络下有撞上
-  宿主 30s 面板超时的风险；改为"被拒后再 fetch"（`refreshTrackingRefs`），
-  代价只发生在确实需要它的那条路径上。
-- **`pull` 读不到配置时报错让用户去设 `pull.rebase`**。放弃：把一个 Git 版本
-  带来的配置负担转嫁给用户，而 merge 是 2.27 之前 `git pull` 自己的行为。
-- **自己读 `pull.rebase`/`pull.ff` 再拼参数**（第一版实现）。放弃：那是 Git 优先级
-  规则的第二个、更差的副本，会静默覆盖 `branch.<name>.rebase` 与
-  `merges`/`interactive`；改为"先原样跑，只在 Git 拒绝回答时补一次 `--no-rebase`"。
-- **无 upstream 时按 `git remote` 的第一个（= 字典序第一个）远端推**。放弃：等于让
-  字母序决定分支发布到哪里，多远端仓库里这是错的；改为 origin / 唯一远端 / 否则报错。
-  - **顺带**：审查提出的 `refArg()` 与"operation 探测不以 `conflicted` 为门槛"都不是
-  另立方案，而是把上述决策补成它们声称的样子（"永不裸 force"、"提供出口"）。
-- **给 merge 也做 `--continue`**。放弃：`git merge --continue` 语义就是提交，
-  而提交按钮已经在了；两个入口做同一件事会让人以为它们不同。
-- **继续只给 rebase/cherry-pick 做，abort 都不做**。放弃：会留下"插件能进、
-  出不来"的状态。
-- **强制推送用裸 `--force`**。放弃：会静默抹掉同事的提交；lease 的失效场景
-  （远端已变）恰好正是需要拦住的那个场景。
-- **`git/branches` 里带上 remotes 列表供视图自己拼推送目标**。放弃：多一次
-  子进程、多一份可能过期的状态，且视图不该知道 Git 的 ref 语法。
 
 ## 已知近似
 
@@ -158,3 +132,64 @@ merge 的 `continue` 直接拒绝——merge 是靠提交收尾的。这条是**
   对话框 detail 改为独立的 `.dialog-detail`（等宽 + `max-height: 45vh` 可滚动）、
   `refreshTrackingRefs` 去掉不可达的 catch 并把"失败即保持陈旧"写成明确取舍、
   harness 从会话 scratch 收进 `tools/`。
+
+## Alternatives considered
+
+- **只把 hint 行留在短消息里**（最小改动）。放弃：Git 的 hint 是英文且冗长，
+  六行封顶后仍会盖掉关键行；而分类后的补救说明能本地化、能只留一句。
+  折中方案（短消息不带 hint、全文进 `detail`）同时满足了"能读"和"不丢"。
+- **toast 里不显示 hint、也不做详情对话框**。放弃：那样被丢掉的信息就真的没了，
+  未分类的失败（钩子脚本自己的输出等）将无法自证。
+- **push 前自动 fetch**。放弃：把一次用户操作变成两次网络往返，慢网络下有撞上
+  宿主 30s 面板超时的风险；改为"被拒后再 fetch"（`refreshTrackingRefs`），
+  代价只发生在确实需要它的那条路径上。
+- **`pull` 读不到配置时报错让用户去设 `pull.rebase`**。放弃：把一个 Git 版本
+  带来的配置负担转嫁给用户，而 merge 是 2.27 之前 `git pull` 自己的行为。
+- **自己读 `pull.rebase`/`pull.ff` 再拼参数**（第一版实现）。放弃：那是 Git 优先级
+  规则的第二个、更差的副本，会静默覆盖 `branch.<name>.rebase` 与
+  `merges`/`interactive`；改为"先原样跑，只在 Git 拒绝回答时补一次 `--no-rebase`"。
+- **无 upstream 时按 `git remote` 的第一个（= 字典序第一个）远端推**。放弃：等于让
+  字母序决定分支发布到哪里，多远端仓库里这是错的；改为 origin / 唯一远端 / 否则报错。
+  - **顺带**：审查提出的 `refArg()` 与"operation 探测不以 `conflicted` 为门槛"都不是
+  另立方案，而是把上述决策补成它们声称的样子（"永不裸 force"、"提供出口"）。
+- **给 merge 也做 `--continue`**。放弃：`git merge --continue` 语义就是提交，
+  而提交按钮已经在了；两个入口做同一件事会让人以为它们不同。
+- **继续只给 rebase/cherry-pick 做，abort 都不做**。放弃：会留下"插件能进、
+  出不来"的状态。
+- **强制推送用裸 `--force`**。放弃：会静默抹掉同事的提交；lease 的失效场景
+  （远端已变）恰好正是需要拦住的那个场景。
+- **`git/branches` 里带上 remotes 列表供视图自己拼推送目标**。放弃：多一次
+  子进程、多一份可能过期的状态，且视图不该知道 Git 的 ref 语法。
+
+## 后果
+
+**收益**
+
+- 被拒的推送有下一步：`gitError` 同时读 stderr / stdout，完整输出（含 `hint:` 行）
+  进 `detail` 不再消失；失败被分类成稳定代码，补救说明按界面语言在 i18n 表里
+  措辞（en / zh-CN 各一份）。
+- 推送失败后的退路可运行：先原样 `git pull`、命中"没策略"才补一次
+  `git pull --no-rebase`，`fatal: Need to specify how to reconcile divergent branches`
+  不再让唯一被推荐的命令变成死路。
+- merge 冲突看得见、收得住：`CONFLICT...` 不再被当成成功的 fetch 日志进 toast，
+  横幅与 sequencer 出口在冲突被 `git add` 解决后仍然在。
+- 推送目标与远端历史都受保护：`resolvePushTarget()` 只推 `@{upstream}` 能解出的目标
+  （多远端报错列名字），推送入口只有 `--force-with-lease`，实测不会抹掉同事的提交。
+- 常态刷新的开销保持为零：`readOperation()` 只在该问的时候问。
+
+**代价与已知上限**
+
+- 确实分叉时多一次往返：先原样 `git pull`，命中
+  `Need to specify how to reconcile divergent branches` 才重试。
+- 失败识别依赖 Git 的措辞：`pushHint`/`pullHint` 是正则匹配，漏判时退回改之前的
+  行为（详见 `## 已知近似`）。
+- 冲突出口的探测有重启盲区：插件进程重启后，"冲突已全部解决但操作未结束"的
+  rebase 不会被 `readOperation()` 认出来；这类状态从终端进来，终端此时也在手边。
+- 强制推送受 lease 约束：基线是本地 remote-tracking ref，没 fetch 就推会被拒
+  （安全侧的错误），菜单项也只在分支有 upstream 时可用。
+- 出口只能收尾不能改写：`continue` 用 `core.editor=true` 接受操作已记录的提交信息，
+  改信息、跳过、merge 的 `--continue` 都留给终端。
+- 推送目标有"不猜"的下限：无 upstream 且只有一个远端时直接推上去（`origin` 优先，
+  否则取那唯一一个），多远端时不替用户挑。
+- 信息分层多一次点击：340px、12 秒的 toast 装不下的六行输出加五行 hint 要点开
+  "详情"才看到，未分类的失败（钩子脚本自己的输出等）借此自证。

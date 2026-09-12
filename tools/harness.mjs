@@ -19,6 +19,7 @@ import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { verifyNotes } from "./notes.mjs";
 
 const PLUGIN = process.env.PLUGIN_DIR || resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const ROOT = mkdtempSync(join(tmpdir(), "pig-harness-"));
@@ -662,6 +663,21 @@ async function main() {
     const applied = await call(repo, "git/apply-patch", { action: "discard", patch, root: repo });
     eq("the same patch applies to the repository it came from", applied.ok, true);
     eq("removing the change", execFileSync("git", ["diff", "--", "tracked.txt"], { cwd: repo, encoding: "utf8" }).trim(), "");
+  }
+
+  // ------------------------------------------------------------------ notes ---
+  // The decision records in `.agents/notes/` carry what the code cannot: why this
+  // shape, and what it displaced. A note whose header drifted, or whose relative
+  // link rotted, is a note the next reader will not trust — so the shape is a gate,
+  // not a convention. Both checks are vendored under `tools/agent-notes/`, which
+  // keeps them independent of whether the skill is installed on this machine.
+  section("agent notes");
+  const NOTE_LABELS = {
+    "verify-agent-note-tree.ts": "every note sits in a legal lifecycle/class path, with working relative links",
+    "verify-agent-note-format.ts": "every note carries the head block, the Status line and its required sections",
+  };
+  for (const { script, ok: verified, output } of verifyNotes()) {
+    ok(NOTE_LABELS[script] ?? script, verified, String(output).replace(/\n/g, "\n       "));
   }
 
   // ------------------------------------------------------------------ result ---
