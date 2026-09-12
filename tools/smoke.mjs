@@ -20,10 +20,18 @@ const STUB = `
 <script>
 (function () {
   // ---- a repository mid-merge, so the conflict banner and the abort/continue
-  // buttons are on screen, plus a push the remote refuses.
+  // buttons are on screen, plus a push the remote refuses. The repository it
+  // shows is a checked-out submodule, so the repository chip and its badge are
+  // on screen too — the state a plain single-repository stub cannot reach.
   var repo = {
     ok: true,
-    repo: { root: "/tmp/demo", name: "demo", workspace: "/tmp/demo" },
+    repo: {
+      root: "/tmp/demo/modules/auth",
+      name: "auth",
+      rel: "modules/auth",
+      workspacePrefix: "modules/auth",
+      workspace: "/tmp/demo",
+    },
     branch: {
       oid: "1111111111111111111111111111111111111111",
       head: "feature/login",
@@ -83,6 +91,11 @@ const STUB = `
   var handlers = {};
   window.pluginBridge = {
     invoke: function (channel, payload) {
+      // The engine answers with the repository it actually switched to; the
+      // stub echoes the request so the chip can be looked at after a switch.
+      if (channel === "git/select-repo") {
+        return Promise.resolve({ ok: true, active: payload.root, root: payload.root, name: "demo" });
+      }
       var replies = {
         "workspace.get": { ok: true, path: "/tmp/demo", name: "demo" },
         "app.getAppearance": { ok: true, locale: ${JSON.stringify(locale)}, theme: "dark" },
@@ -90,7 +103,16 @@ const STUB = `
         "git/prefs": { ok: true, prefs: { ui: { messages: [], commitModelKey: "" } } },
         "git/console": { ok: true, entries: [] },
         "git/stashes": { ok: true, stashes: [] },
-        "git/diff": { ok: true, patch: PATCH, binary: false },
+        "git/diff": { ok: true, text: PATCH, binary: false, empty: false },
+        "git/repos": {
+          ok: true,
+          active: "modules/auth",
+          repos: [
+            { root: "/tmp/demo", name: "demo", rel: ".", kind: "root", active: false },
+            { root: "/tmp/demo/modules/auth", name: "auth", rel: "modules/auth", kind: "submodule", active: true },
+            { root: "/tmp/demo/tools/probe", name: "probe", rel: "tools/probe", kind: "nested", active: false },
+          ],
+        },
         "git/last-message": { ok: true, message: "" },
         "git/branches": {
           ok: true,

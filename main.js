@@ -20,6 +20,12 @@
  *
  * Nothing here writes to the repository except when the user asked for it:
  * stage / unstage / discard / commit / branch / stash all map to one explicit
+ *
+ * A project can hold more than one repository: submodules, and repositories
+ * that merely live inside another one. `readRepo` is the single place that
+ * decides which of them every command runs against, so picking one in the
+ * repository list redirects the whole tool window without any other command
+ * knowing about it; `git/repos` is what the list is built from.
  * Git command, and hunk operations pipe a patch that Git validates itself.
  */
 
@@ -44,8 +50,18 @@ const RS_CHAR = "\u001e";
  */
 const CONSOLE_LIMIT = 200;
 let consoleEntries = [];
-/** Commands whose output is pure plumbing and would only add noise. */
-const CONSOLE_QUIET = new Set(["rev-parse", "ls-files", "for-each-ref", "--version"]);
+/**
+ * Commands whose output is pure plumbing and would only add noise — plus
+ * `config`, which this plugin only ever runs to *read* something (the user's
+ * identity, `.gitmodules`). A failed read is still recorded.
+ */
+const CONSOLE_QUIET = new Set([
+  "rev-parse",
+  "ls-files",
+  "for-each-ref",
+  "config",
+  "--version",
+]);
 
 function recordConsole(args, result, cwd) {
   if (CONSOLE_QUIET.has(args[0]) && result.ok) return;
@@ -255,7 +271,10 @@ function runGit(args, options = {}) {
         detail: code === 0 ? undefined : gitDetail(stdout, stderr),
         truncated,
       };
-      recordConsole(args, result, cwd);
+      // `quiet` is for a probe whose *failure* is an expected answer (asking
+      // whether a file is tracked, say): recording it would dress an ordinary
+      // path up as a failure in the Console.
+      if (!options.quiet) recordConsole(args, result, cwd);
       resolve(result);
     };
 
@@ -1054,17 +1073,294 @@ function workspacePath() {
 async function refreshWorkspace() {
   try {
     const workspace = await pi.workspace.get();
-    cachedWorkspace = workspace?.path ?? null;
+    const next = workspace?.path ?? null;
+    // A chosen repository belongs to the project it was chosen in. The plugin
+    // process outlives project switches, so the choice is dropped the moment
+    // the workspace changes — otherwise every command would keep running in
+    // the previous project's submodule.
+    if (next !== cachedWorkspace) selectedRoot = null;
+    cachedWorkspace = next;
   } catch {
+    selectedRoot = null;
     cachedWorkspace = null;
   }
   return cachedWorkspace;
 }
 
+// ---------------------------------------------------------------------------
+// Repositories
+// ---------------------------------------------------------------------------
+
 /**
- * Resolve the repository that contains the workspace. `git rev-parse` already
- * walks up parent directories, so a workspace nested inside a repository still
- * resolves to the right root.
+ * The repository the tool windows are pointed at when it is not the workspace's
+ * own repository: a checked-out submodule, or a repository nested anywhere
+ * inside it. `null` means "the workspace's own repository", which keeps the
+ * ordinary single-repository project free of any state.
+ */
+let selectedRoot = null;
+
+/**
+ * How far the discovery walk goes below the workspace root, how many
+ * directories it is willing to look at, and the trees it will not enter.
+ *
+ * The walk runs on a refresh, in a project whose size is not known in advance,
+ * so it is bounded three ways. The skip list holds dependency, cache and build
+ * trees: they are large, and a Git repository inside one is a vendored or
+ * generated copy rather than something a person works in. A declared submodule
+ * is listed even when it sits outside all three bounds — see
+ * `discoverRepositories`.
+ */
+const REPO_SCAN_DEPTH = 4;
+const REPO_SCAN_BUDGET = 5000;
+const REPO_SCAN_SKIP = new Set([
+  ".git",
+  "node_modules",
+  "bower_components",
+  "vendor",
+  ".venv",
+  "venv",
+  "__pycache__",
+  ".mypy_cache",
+  ".pytest_cache",
+  ".tox",
+  ".gradle",
+  ".dart_tool",
+  "Pods",
+  ".cache",
+  ".next",
+  ".nuxt",
+  ".terraform",
+]);
+
+/**
+ * A path with symlinks resolved where the filesystem allows it.
+ *
+ * This is not pedantry: `git rev-parse --show-toplevel` answers with the real
+ * path, while the host hands out the workspace path as the user opened it, and
+ * on macOS the temporary directory alone differs by a `/private` prefix. A
+ * comparison of the two raw strings would conclude that a repository is not
+ * inside its own workspace.
+ */
+function realPath(value) {
+  try {
+    return fs.realpathSync(value);
+  } catch {
+    return path.resolve(value);
+  }
+}
+
+function samePath(left, right) {
+  if (!left || !right) return false;
+  return left === right || realPath(left) === realPath(right);
+}
+
+/** Is `child` the same directory as `parent`, or somewhere below it? */
+function isInside(parent, child) {
+  const base = realPath(parent);
+  const target = realPath(child);
+  return target === base || target.startsWith(base + path.sep);
+}
+
+/**
+ * The absolute path of the repository rooted exactly at `directory`, or null.
+ *
+ * `rev-parse` alone is not enough: run in a subdirectory it happily answers
+ * with the enclosing repository, which would let a view point the tool windows
+ * at `src/` and call it a repository of its own. A path that is not a
+ * directory, or not there at all, is not a repository either.
+ */
+async function resolveRepositoryRoot(directory) {
+  if (typeof directory !== "string" || !directory) return null;
+  let stats;
+  try {
+    stats = fs.statSync(directory);
+  } catch {
+    return null;
+  }
+  if (!stats.isDirectory()) return null;
+  const top = await runGit(["rev-parse", "--show-toplevel"], { cwd: directory });
+  if (!top.ok) return null;
+  const root = top.stdout.trim();
+  return samePath(root, directory) ? root : null;
+}
+
+/** The paths `.gitmodules` declares, read by Git's own config parser. */
+async function declaredSubmodulePaths(root) {
+  const paths = new Set();
+  const file = path.join(root, ".gitmodules");
+  // Asked only when there is something to ask. `config -f` on a missing file
+  // exits 1, which would show up in the Console as a failure on the ordinary
+  // path — and a project without submodules is the ordinary path.
+  if (!fs.existsSync(file)) return paths;
+  const result = await runGit(
+    ["config", "-f", ".gitmodules", "--get-regexp", "^submodule\\..*\\.path$"],
+    { cwd: root },
+  );
+  if (!result.ok) return paths;
+  for (const line of result.stdout.split("\n")) {
+    // `<key> <value>`; the value is the path, and it may contain spaces.
+    const match = /^\S+\s+(.+)$/.exec(line.trim());
+    if (match) paths.add(match[1].replace(/\\/g, "/"));
+  }
+  return paths;
+}
+
+/**
+ * Walk `root` for repositories, alphabetically by path.
+ *
+ * A directory holding `.git` is a repository: a submodule worktree has a file
+ * there, an ordinary clone a directory. Finding one does not end the walk —
+ * descending through it is what makes a submodule's own submodules, or a
+ * repository inside a vendored one, reachable at all, since the list is always
+ * built from the workspace's repository. Symlinked directories are skipped
+ * (`Dirent.isDirectory()` is already false for them), which also means a link
+ * pointing back up the tree cannot be followed.
+ */
+function scanNestedRepositories(root) {
+  const found = [];
+  let scanned = 0;
+
+  const walk = (directory, relative, depth) => {
+    if (depth > REPO_SCAN_DEPTH || scanned > REPO_SCAN_BUDGET) return;
+    let entries;
+    try {
+      entries = fs.readdirSync(directory, { withFileTypes: true });
+    } catch {
+      // Unreadable, or it went away mid-walk. Its parent is still a usable
+      // answer, so this is not an error worth surfacing.
+      return;
+    }
+    for (const entry of entries) {
+      if (!entry.isDirectory() || REPO_SCAN_SKIP.has(entry.name)) continue;
+      const childRelative = relative ? `${relative}/${entry.name}` : entry.name;
+      const child = path.join(directory, entry.name);
+      if (fs.existsSync(path.join(child, ".git"))) {
+        found.push({ root: child, rel: childRelative });
+      }
+      scanned += 1;
+      if (scanned > REPO_SCAN_BUDGET) return;
+      walk(child, childRelative, depth + 1);
+    }
+  };
+
+  walk(root, "", 1);
+  return found.sort((left, right) => left.rel.localeCompare(right.rel));
+}
+
+/**
+ * Which of these nested repositories the repository holding them records as a
+ * submodule.
+ *
+ * The index is the authority here, not `.gitmodules`: the parent records the
+ * exact commit of a submodule as a `160000` entry, and that entry is what
+ * staging and committing in the parent act on. A nested repository without such
+ * an entry is one that merely happens to live inside another repository — the
+ * parent stores its files instead, or ignores them. The question is asked once
+ * per holding repository, with every candidate as a single pathspec, so the
+ * cost does not grow with the number of nested repositories.
+ *
+ * @param {string} workspaceRoot
+ * @param {{root: string, rel: string}[]} nested
+ * @returns {Promise<Set<string>>} the `rel` of every submodule
+ */
+async function submodulePaths(workspaceRoot, nested) {
+  const rels = new Set(nested.map((entry) => entry.rel));
+  /** The repository directly holding `rel`: the longest prefix, or the root. */
+  const holderOf = (rel) => {
+    const parts = rel.split("/");
+    for (let length = parts.length - 1; length > 0; length -= 1) {
+      const candidate = parts.slice(0, length).join("/");
+      if (rels.has(candidate)) return candidate;
+    }
+    return "";
+  };
+
+  /*
+   * Grouped by the repository that holds them: the question goes to *that*
+   * repository's index, and the pathspec has to be in its terms — `mod/dep` is
+   * `dep` to `mod`. The full path would match nothing there, which would
+   * quietly classify every submodule of a submodule as merely nested.
+   */
+  const groups = new Map();
+  for (const entry of nested) {
+    const holder = holderOf(entry.rel);
+    if (!groups.has(holder)) {
+      groups.set(holder, {
+        root: holder ? path.join(workspaceRoot, holder) : workspaceRoot,
+        specs: [],
+      });
+    }
+    groups.get(holder).specs.push(holder ? entry.rel.slice(holder.length + 1) : entry.rel);
+  }
+
+  const submodules = new Set();
+  for (const [holder, group] of groups) {
+    const result = await runGit(
+      ["ls-files", "--stage", "-z", "--", ...group.specs],
+      { cwd: group.root },
+    );
+    if (!result.ok) continue;
+    for (const record of result.stdout.split("\0")) {
+      // `<mode> <object> <stage>\t<path>`
+      if (!record.startsWith("160000 ")) continue;
+      const tab = record.indexOf("\t");
+      if (tab < 0) continue;
+      // The record's path is the holder's, so the holder has to go back on
+      // before it can mean anything in the workspace-wide listing.
+      const found = record.slice(tab + 1).replace(/\\/g, "/");
+      submodules.add(holder ? `${holder}/${found}` : found);
+    }
+  }
+  return submodules;
+}
+
+/**
+ * Every repository the tool windows can be pointed at: the workspace's own
+ * repository first, then everything nested inside it.
+ *
+ * A declared submodule is added even when the walk's bounds left it out — a
+ * submodule placed deeper than `REPO_SCAN_DEPTH`, or inside a tree the skip
+ * list excludes. An entry in `.gitmodules` is a statement about the project,
+ * while the walk's limits are a guess about its size. A declared path that is
+ * not checked out is left out: there is no working tree to show or commit in.
+ */
+async function discoverRepositories(workspaceRoot) {
+  const nested = scanNestedRepositories(workspaceRoot);
+  const known = new Set(nested.map((entry) => entry.rel));
+  for (const rel of await declaredSubmodulePaths(workspaceRoot)) {
+    if (known.has(rel)) continue;
+    const absolute = path.join(workspaceRoot, rel);
+    if (!isInside(workspaceRoot, absolute)) continue;
+    if (!fs.existsSync(path.join(absolute, ".git"))) continue;
+    nested.push({ root: absolute, rel });
+    known.add(rel);
+  }
+
+  const submodules = await submodulePaths(workspaceRoot, nested);
+  const repositories = nested
+    .sort((left, right) => left.rel.localeCompare(right.rel))
+    .map((entry) => ({
+      root: entry.root,
+      name: path.basename(entry.root),
+      rel: entry.rel,
+      kind: submodules.has(entry.rel) ? "submodule" : "nested",
+    }));
+  return [
+    { root: workspaceRoot, name: path.basename(workspaceRoot), rel: ".", kind: "root" },
+    ...repositories,
+  ];
+}
+
+/**
+ * Resolve the repository the commands run against: the one the user picked in
+ * the repository list, or the workspace's own repository.
+ *
+ * `git rev-parse` walks up parent directories, so a workspace nested inside a
+ * repository still resolves to that repository's root. A picked repository is
+ * honoured only while the workspace it was picked in is still open, it is still
+ * inside that workspace, and it is still a repository — a submodule can be
+ * deinitialised between two refreshes, and the tool windows have to fall back
+ * rather than fail.
  */
 async function readRepo() {
   await refreshWorkspace();
@@ -1079,15 +1375,54 @@ async function readRepo() {
       message: `Not a Git repository: ${cachedWorkspace}`,
     };
   }
-  const root = top.stdout.trim();
+  const workspaceRoot = top.stdout.trim();
+  let root = workspaceRoot;
+  if (selectedRoot && !samePath(selectedRoot, workspaceRoot)) {
+    const resolved = isInside(workspaceRoot, selectedRoot)
+      ? await resolveRepositoryRoot(selectedRoot)
+      : null;
+    if (resolved) root = resolved;
+    else selectedRoot = null;
+  }
+  if (samePath(root, workspaceRoot)) selectedRoot = null;
+
   const gitDir = await runGit(["rev-parse", "--absolute-git-dir"], { cwd: root });
+  const relative = path.relative(workspaceRoot, root);
   return {
     ok: true,
     root,
     name: path.basename(root),
+    // Where the repository sits inside the workspace's own repository; "." is
+    // the workspace's own.
+    rel: relative ? relative.split(path.sep).join("/") : ".",
+    // Where the repository sits inside the *workspace*, which is the form the
+    // host's `fs` channels resolve against, and null when it is not inside it
+    // at all (a workspace that is itself inside the repository, say).
+    //
+    // Computed here rather than in the views because it has to be compared as a
+    // real path: Git answers with `/private/var/…` where the host handed out
+    // `/var/…`, and a view holding only strings would conclude that the
+    // repository is outside the workspace and refuse to open any file in it.
+    workspacePrefix: workspaceRelativeRoot(cachedWorkspace, root),
+    // The repository the workspace *is*: what a picked repository must stay
+    // inside, and what the repository list is built from.
+    workspaceRoot,
     gitDir: gitDir.ok ? gitDir.stdout.trim() : path.join(root, ".git"),
     workspace: cachedWorkspace,
   };
+}
+
+/**
+ * The path of `root` inside `workspace`, POSIX-separated, or null when it is
+ * not inside it. "." means the two are the same directory.
+ */
+function workspaceRelativeRoot(workspace, root) {
+  if (!workspace || !root) return null;
+  const base = realPath(workspace);
+  const target = realPath(root);
+  if (target === base) return ".";
+  if (!target.startsWith(base + path.sep)) return null;
+  return target.slice(base.length + 1).split(path.sep).join("/");
 }
 
 /** Every repository-scoped command runs from the repository root. */
@@ -1398,7 +1733,22 @@ async function readStatus(repo) {
     ok: true,
     // `workspace` lets the views translate repository-relative paths into the
     // workspace-relative form the host's fs channels are scoped to.
-    repo: { root: repo.root, name: repo.name, workspace: repo.workspace ?? null },
+    repo: {
+      root: repo.root,
+      name: repo.name,
+      // "." is the workspace's own repository; a nested one also shows where it
+      // sits inside that repository, which is how the views label it.
+      rel: repo.rel ?? ".",
+      // The form the host's `fs` channels resolve against, so a view never has
+      // to rebuild it from two absolute paths that may spell the same directory
+      // differently.
+      // Deliberately null when the repository is not inside the workspace: the
+      // view then falls back to its own rebasing, whereas a "." would send it
+      // looking for `mod/f.txt` inside a workspace that is a *subdirectory* of
+      // the repository.
+      workspacePrefix: repo.workspacePrefix ?? null,
+      workspace: repo.workspace ?? null,
+    },
     branch,
     operation,
     staged,
@@ -1434,19 +1784,34 @@ async function readDiff(repo, filePath, mode, ignoreWhitespace) {
 
   let result = await runGit(base, { cwd: repo.root });
 
-  // An untracked file has no index entry, so `git diff` prints nothing for it.
-  // `--no-index` against /dev/null renders it as a full addition.
+  // An untracked file has no index entry, so `git diff` prints nothing for it:
+  // an empty diff is not proof that there is nothing to show.
+  //
+  // The same empty output is what a clean tracked file produces, which is why
+  // being untracked has to be *asked*, not inferred — without the `ls-files`
+  // probe, selecting a file that has no changes renders the whole of it as an
+  // addition. This became reachable once the tool windows could be pointed at
+  // another repository, because a selection can outlive the change list it came
+  // from; it was wrong in the single-repository case too.
   if (
     mode !== "index" &&
     result.ok &&
     !result.stdout.trim() &&
     fs.existsSync(path.resolve(repo.root, filePath))
   ) {
-    const nullDevice = process.platform === "win32" ? "NUL" : "/dev/null";
-    result = await runGit(
-      ["diff", "--no-color", "--no-ext-diff", "-U3", "--no-index", "--", nullDevice, filePath],
-      { cwd: repo.root },
-    );
+    // Asked, not inferred, and quietly: "is it tracked" fails for exactly the
+    // files this branch exists for.
+    const tracked = await runGit(["ls-files", "--error-unmatch", "--", filePath], {
+      cwd: repo.root,
+      quiet: true,
+    });
+    if (!tracked.ok) {
+      const nullDevice = process.platform === "win32" ? "NUL" : "/dev/null";
+      result = await runGit(
+        ["diff", "--no-color", "--no-ext-diff", "-U3", "--no-index", "--", nullDevice, filePath],
+        { cwd: repo.root },
+      );
+    }
   }
 
   // `git diff --no-index` exits 1 when the files differ: that is success here.
@@ -1456,9 +1821,11 @@ async function readDiff(repo, filePath, mode, ignoreWhitespace) {
     ok,
     filePath,
     mode,
+    // Which repository the diff was read from, so a patch built from it can be
+    // refused if the repository has changed by the time it comes back.
+    root: repo.root,
     text,
     binary: /^Binary files |^GIT binary patch/m.test(text),
-    empty: !text.trim(),
     message: ok ? undefined : result.message,
   };
 }
@@ -1698,6 +2065,53 @@ async function onPanelInvoke(channel, payload = {}) {
       };
     }
 
+    // -- repository list ----------------------------------------------------
+    /**
+     * Every repository the tool windows can be pointed at. Separate from
+     * `git/repo` because it is the expensive one: it walks the tree, while
+     * `git/repo` runs on every refresh and must stay a couple of Git calls.
+     */
+    case "git/repos": {
+      const repo = await readRepo();
+      if (!repo.ok) return repo;
+      const repositories = await discoverRepositories(repo.workspaceRoot);
+      return {
+        ok: true,
+        // Which repository the commands currently run against, as a `rel`.
+        active: repo.rel,
+        repos: repositories.map((entry) => ({
+          ...entry,
+          active: samePath(entry.root, repo.root),
+        })),
+      };
+    }
+
+    /**
+     * Point every command at another repository. Accepted only for a directory
+     * that is a repository root inside the current workspace's repository: the
+     * bridge forwards whatever a view sends, so this validates its own input
+     * rather than trusting a path that arrived over it.
+     */
+    case "git/select-repo": {
+      const repo = await readRepo();
+      if (!repo.ok) return repo;
+      const requested = String(payload.root ?? "");
+      const resolved = isInside(repo.workspaceRoot, requested)
+        ? await resolveRepositoryRoot(requested)
+        : null;
+      if (!resolved) {
+        return {
+          ok: false,
+          message: `Not a repository inside this workspace: ${requested}`,
+        };
+      }
+      // Choosing the workspace's own repository is the absence of a choice.
+      selectedRoot = samePath(resolved, repo.workspaceRoot) ? null : resolved;
+      const next = await readRepo();
+      if (!next.ok) return next;
+      return { ok: true, active: next.rel, root: next.root, name: next.name };
+    }
+
     case "git/status":
       return withRepo((repo) => readStatus(repo));
 
@@ -1817,7 +2231,22 @@ async function onPanelInvoke(channel, payload = {}) {
       if (!["stage", "unstage", "discard"].includes(action)) {
         return { ok: false, message: `Unknown patch action: ${action}` };
       }
-      return withRepo((repo) => applyPatch(repo, payload.patch, action));
+      // A patch carries the file paths and the content it was built from, and
+      // `discard` writes to the worktree. The repository list is one click away
+      // and a switch starts a reload the user can click through, so a patch can
+      // outlive the repository it came from — where its paths can name a
+      // different file entirely. Refuse rather than edit the wrong one.
+      const from = typeof payload.root === "string" && payload.root ? payload.root : null;
+      return withRepo((repo) => {
+        if (from && !samePath(from, repo.root)) {
+          return {
+            ok: false,
+            code: "STALE_REPOSITORY",
+            message: "This diff came from another repository; refresh and try again.",
+          };
+        }
+        return applyPatch(repo, payload.patch, action);
+      });
     }
 
     // -- committing ---------------------------------------------------------
@@ -2178,8 +2607,11 @@ async function onLoad() {
     run: async () => {
       await refreshWorkspace();
       const repo = await readRepo();
+      // A nested repository is named by where it sits: `mod` alone would not
+      // say which one was picked when the workspace holds several.
+      const label = repo.ok && repo.rel && repo.rel !== "." ? repo.rel : repo.name;
       await pi.ui.showToast(
-        repo.ok ? `Git repository: ${repo.name}` : repo.message,
+        repo.ok ? `Git repository: ${label}` : repo.message,
         repo.ok ? "info" : "error",
       );
     },
@@ -2187,7 +2619,9 @@ async function onLoad() {
 }
 
 async function onUnload() {
+  selectedRoot = null;
   detachWorkspaceListener();
+
   gitBinaryCache = undefined;
   try {
     await pi.commands.unregister(OPEN_COMMAND);

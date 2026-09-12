@@ -167,8 +167,13 @@
       draftedStaged: "Commit message drafted from everything staged",
       draftedFile: "Commit message drafted from {{file}}",
       submoduleBadge: "submodule",
-      submoduleInside: "This change is inside the submodule {{path}}. The parent repository can only record which commit the submodule points at, so it cannot be committed from here. Commit inside the submodule first, then stage it here.",
+      submoduleInside: "This change is inside the submodule {{path}}. The parent repository can only record which commit the submodule points at, so it cannot be committed from here. Switch to the submodule in the repository list (top left), commit there, then come back and stage it here.",
       submoduleStagedHint: "Staged the submodule's commit. Its own uncommitted changes stay inside it and still show as unstaged.",
+      repository: "Repository",
+      switchRepository: "Switch repository",
+      repositoryList: "Repositories",
+      nestedRepoBadge: "nested repository",
+      nestedRepoHint: "A Git repository that lives inside this one without being a submodule: the parent stores none of its files.",
       appShortcutHint: "The command palette belongs to the app: click back into the main window first, or press Alt+Space for the plugin launcher.",
       dropStashConfirm: "Drop this stash?",
       noMatchingChanges: "No changes match the filter",
@@ -350,8 +355,13 @@
       draftedStaged: "已生成提交信息（来源：全部已暂存内容）",
       draftedFile: "已生成提交信息（来源：{{file}}）",
       submoduleBadge: "子模块",
-      submoduleInside: "这个改动在子模块 {{path}} 内部。父仓库只能记录子模块指向哪个提交，无法从这里把它提交掉。请先在子模块里提交，再回到这里暂存。",
+      submoduleInside: "这个改动在子模块 {{path}} 内部。父仓库只能记录子模块指向哪个提交，无法从这里把它提交掉。请在左上角的仓库列表里切换到该子模块，在里面提交，再回到这里暂存。",
       submoduleStagedHint: "已暂存子模块指向的提交。子模块内部未提交的改动仍然留在里面，所以它依旧显示为未暂存。",
+      repository: "仓库",
+      switchRepository: "切换仓库",
+      repositoryList: "仓库列表",
+      nestedRepoBadge: "嵌套仓库",
+      nestedRepoHint: "这个 Git 仓库位于当前仓库内部，但不是子模块：父仓库不保存它的任何文件。",
       appShortcutHint: "命令面板由宿主提供，需先点回主窗口；或在视图内按 Alt+Space 打开插件启动器。",
       diff: "差异",
       dropStashConfirm: "删除该储藏？",
@@ -731,6 +741,100 @@
     return menu;
   }
 
+  // -------------------------------------------------------- repositories ---
+  /**
+   * The repository selector — IDEA's "Root" dropdown — for the left of a tool
+   * window's toolbar.
+   *
+   * Submodules, and repositories that merely live inside another repository,
+   * are separate Git repositories rather than folders. Every command is scoped
+   * to a working directory, so a change inside a submodule cannot be staged,
+   * diffed or committed from the parent: the parent can only record *which
+   * commit* the submodule points at. Picking one here is what makes it
+   * reachable at all.
+   *
+   * A single-repository project has nothing to choose between, so the chip
+   * hides itself and the toolbar keeps the shape it has always had.
+   */
+  function mountRepoSelector(container, ctx) {
+    const chip = h("button", { class: "branch-chip repo-chip", type: "button" });
+    container.append(chip);
+    let repos = [];
+
+    /** Where the repository sits, relative to the workspace's own repository. */
+    function repositoryLabel(entry) {
+      if (!entry) return t("repository");
+      return entry.rel === "." ? entry.name : entry.rel;
+    }
+
+    function kindText(entry) {
+      return entry.kind === "submodule" ? t("submoduleBadge") : t("nestedRepoBadge");
+    }
+
+    function paint() {
+      PIG.clear(chip);
+      chip.style.display = repos.length > 1 ? "" : "none";
+      if (repos.length < 2) return;
+      const current = repos.find((entry) => entry.active) ?? repos[0];
+      chip.append(icon("folder", 13));
+      chip.append(h("span", { class: "name", text: repositoryLabel(current) }));
+      if (current.kind !== "root") {
+        chip.append(h("span", { class: "badge", text: kindText(current) }));
+      }
+      chip.title = `${t("switchRepository")} — ${current.root}`;
+    }
+
+    async function openMenu() {
+      // Re-read on open, not only on refresh: a submodule can be added or
+      // deinitialised in between, and a menu listing a repository that is no
+      // longer there is worse than one extra Git call.
+      const result = await invoke("git/repos");
+      if (result?.ok) {
+        repos = result.repos ?? [];
+        paint();
+      }
+      popup(chip, [
+        { type: "label", label: t("repositoryList") },
+        ...repos.map((entry) => ({
+          label: repositoryLabel(entry),
+          title: entry.kind === "root"
+            ? entry.root
+            : `${entry.root} — ${entry.kind === "submodule" ? t("submoduleBadge") : t("nestedRepoHint")}`,
+          checked: entry.active,
+          onSelect: async () => {
+            if (entry.active) return;
+            const switched = await invoke("git/select-repo", { root: entry.root });
+            if (!switched?.ok) {
+              toast(errorText(switched), "error");
+              return;
+            }
+            // The chip does not wait for the view's reload to say where the tool
+            // window points now: the answer to the switch is enough, and the
+            // view's own state is the view's business.
+            repos = repos.map((candidate) => ({
+              ...candidate,
+              active: candidate.root === switched.root,
+            }));
+            paint();
+            ctx.onSwitch?.(switched);
+          },
+        })),
+      ]);
+    }
+
+    chip.addEventListener("click", () => {
+      openMenu().catch((error) => toast(String(error?.message ?? error), "error"));
+    });
+
+    return {
+      /** Take the list from a `git/repos` answer. */
+      update(result) {
+        repos = result?.ok ? (result.repos ?? []) : [];
+        paint();
+      },
+    };
+  }
+
   // ------------------------------------------------------------- dialogs ---
   /** A small modal in the IDEA shape: message, then actions. */
   function dialog({ title, message, detail, confirmLabel, cancelLabel, danger, input }) {
@@ -1076,5 +1180,8 @@
     reportSync,
     refreshTrackingRefs,
     appShortcutHintBinding,
+    // Shared by both tool windows, so the two cannot disagree about which
+    // repository they are showing — the same reason the branch chip is shared.
+    repoSelector: { mount: mountRepoSelector },
   });
 })(window.PIG || (window.PIG = {}));

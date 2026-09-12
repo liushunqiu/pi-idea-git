@@ -36,6 +36,7 @@ workflow.
 | `Stage Hunk` / `Discard Hunk` | Commit → diff pane | Hover a hunk header on a worktree diff |
 | `Show Diff`, `Rollback`, `Add`/`Remove from index`, `Open File`, `Reveal in File Manager`, `Copy path` | Commit → file context menu | `Rollback` confirms first; it deletes untracked files and restores tracked ones |
 | Branch widget (`main ↑2 ↓1`) | both toolbars | Branch, ahead/behind, and a popup with local/remote branches, `New Branch`, `Checkout`, `Fetch`, `Pull`, `Push`, `Force Push (with lease)`, `Stash Changes`, and the stash list |
+| Repository widget (`mod · submodule`) | both toolbars | Lists the workspace's own repository plus every repository nested inside it — submodules, and clones that merely live there — and points the whole tool window at the one you pick. Hidden when there is only one, as in a single-repository project |
 | `Log`, `Console` | Git → tabs | Console shows every command the plugin ran, with output, failures in red, and `Clear All` |
 | Commit graph | Git → Log | Lanes computed from parent information; the branch tip is yellow, local branches green, remote violet, tags grey |
 | `Branches` pane | Git → Log → left | `Local branches` / `Remote branches`, checkout on click, actions on right-click |
@@ -110,6 +111,33 @@ UI shows. Diffs are produced with Git's default `a/`-`b/` prefixes because
 `git apply` strips one leading component; the patch sent back for a hunk is the
 original header plus the chosen hunks, which is what lets `--recount` accept a
 partial selection.
+
+### Repositories inside a repository
+
+A project is often more than one repository: a checked-out submodule, or a
+clone that happens to live inside another one. They are separate repositories,
+not folders — the parent only records *which commit* a submodule points at — so
+the parent can neither show their files nor commit anything inside them. The
+repository widget at the left of each toolbar is what makes them reachable: pick
+one and every command behind the view — status, diff, log, branches, stash,
+commit, hunk staging — runs in it.
+
+The list is built from the workspace's repository by walking the tree, and the
+walk is bounded: four levels deep, at most 5000 directories, and no descent into
+dependency, build and cache trees (`node_modules`, `vendor`, `Pods`, `.venv`, …).
+A path declared in `.gitmodules` is listed regardless of those bounds, because an
+entry there is a statement about the project while the bounds are a guess about
+its size. A declared but unchecked-out submodule is not listed: there is no
+working tree to show or commit in.
+
+Two repositories that look alike are told apart from the parent's index, not
+from `.gitmodules`: a path the parent records as a `160000` gitlink is a
+**submodule** (staging it there records a commit), anything else is a **nested
+repository** (the parent stores none of its files).
+
+The choice belongs to the open project and is not written to prefs: switching
+projects, or removing the directory, falls back to the workspace's own
+repository.
 
 ## Permissions
 
@@ -420,24 +448,29 @@ env -i PATH="$PATH" TMPDIR="${TMPDIR:-/tmp}" node tools/drive.mjs . git/repo
 That is how the engine's push path was verified against a real HTTPS remote
 without a credential prompt.
 
-### Testing the sync paths
+### Testing the engine
 
 `tools/harness.mjs` drives the engine against real repositories built on the
-spot — a bare remote, two clones, a genuine divergence — and asserts the
-behaviours a refusal depends on: the classification, the message, the details,
-the stale-then-fetched ahead/behind chip, the conflicted merge and its exits,
-where a push lands (and is refused to land), and that a stale lease never
-overwrites a colleague's work.
+spot — a bare remote, two clones, a genuine divergence, a submodule that holds a
+submodule — and asserts the behaviours a refusal depends on: the classification,
+the message, the details, the stale-then-fetched ahead/behind chip, the
+conflicted merge and its exits, where a push lands (and is refused to land), that
+a stale lease never overwrites a colleague's work, and — in the last four
+sections — that a repository nested inside another one is listed, can be picked,
+can be committed in, how far the scan looks, what a `.gitmodules` declaration
+overrides, and that a patch from a repository the view has since left is refused
+rather than applied.
 
 ```bash
-node tools/harness.mjs        # 75 assertions, all against real git
+node tools/harness.mjs        # 134 assertions, all against real git
 ```
 
 ### Looking at a view without a host
 
 `tools/smoke.mjs` writes the built view with a stubbed `window.pluginBridge`
 into `.smoke/`, so a state that is awkward to produce on demand (a repository
-mid-merge, a push the remote refuses) can be rendered and inspected:
+mid-merge, a push the remote refuses, a checked-out submodule as the active
+repository) can be rendered and inspected:
 
 ```bash
 node tools/build.mjs && node tools/smoke.mjs commit zh-CN

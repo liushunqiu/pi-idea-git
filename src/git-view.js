@@ -249,6 +249,22 @@
 
     const toolbar = h("div", { class: "toolbar" });
     let searchButton = null;
+    // The repository chip first, then the branch: which repository, and only
+    // then which branch of it.
+    const repoHolder = h("div", { style: { display: "contents" } });
+    /**
+     * A switch drops what the leaving repository owned *before* the reload
+     * starts: the commit list and its context menus stay live during a refresh,
+     * and they name revisions of a repository the window has already left.
+     */
+    const repoWidget = PIG.repoSelector.mount(repoHolder, {
+      onSwitch: () => {
+        forgoRepositoryState();
+        paintList();
+        paintDetail();
+        refresh().catch(() => {});
+      },
+    });
     const branchHolder = h("div", { style: { display: "contents" } });
     const branchWidget = PIG.branchWidget.mount(branchHolder, { onChanged: () => refresh() });
     const listHost = h("div", { class: "scroll", style: { flex: "1 1 auto" } });
@@ -263,6 +279,7 @@
 
     function paintToolbar() {
       PIG.clear(toolbar);
+      toolbar.append(repoHolder);
       toolbar.append(branchHolder);
       toolbar.append(h("div", { class: "toolbar-separator" }));
       toolbar.append(iconButton("refresh", tip("refresh", KEYS.refresh), () => refresh()));
@@ -683,9 +700,35 @@
       state.branches = result.branches ?? [];
       paintBranches();
     }
+    /**
+
+     * Which repository the loaded state belongs to. A commit selection, the
+     * branch and path filters and the changed-file list are all
+     * repository-relative, so a switch has to clear them rather than let them
+     * keep describing the previous repository's history. `undefined` means
+     * nothing has been loaded yet.
+     */
+    let loadedRepo;
+
+    /** Drop everything that describes one repository, and only that one. */
+    function forgoRepositoryState() {
+      state.selection = null;
+      state.changedFiles = [];
+      state.details = null;
+      state.commits = [];
+      state.search = "";
+      state.branchFilter = "";
+      state.pathFilter = "";
+      // A commit diff belongs to the commit it came from, and its actions name a
+      // revision the new repository may not even have.
+      activeDiffOverlay?.();
+    }
 
     async function refresh() {
       const repo = await invoke("git/repo");
+      const repoRoot = repo.ok ? (repo.repo?.root ?? null) : null;
+      if (loadedRepo !== undefined && repoRoot !== loadedRepo) forgoRepositoryState();
+      loadedRepo = repoRoot;
       state.repo = repo.ok ? repo : null;
       state.error = repo.ok ? null : (repo.message ?? t("notARepository"));
       state.repoPath = repo.ok ? null : await currentFolder();
@@ -735,8 +778,22 @@
       PIG.appShortcutHintBinding(),
     ]);
 
-    PIG.watchWorkspace(() => { refresh().catch(() => {}); });
-    refresh().catch((error) => toast(String(error?.message ?? error), "error"));
+    /**
+     * The repository list, read when it can actually have changed — mounting, a
+     * project switch, and opening the chip's menu, which re-reads its own —
+     * rather than on every refresh. Building it walks the tree, and the Log
+     * refreshes after every branch action.
+     */
+    async function loadRepositories() {
+      repoWidget.update(await invoke("git/repos"));
+    }
+
+    PIG.watchWorkspace(() => {
+      loadRepositories().then(() => refresh()).catch(() => {});
+    });
+    loadRepositories()
+      .then(() => refresh())
+      .catch((error) => toast(String(error?.message ?? error), "error"));
 
     return { refresh, selectCommit: select, openCommitDiff };
   }

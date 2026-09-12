@@ -83,9 +83,18 @@
    * outside the workspace the action simply is not offered.
    */
   function workspaceRelative(filePath, repo) {
+    if (!filePath) return null;
+    // The engine already worked out where the repository sits inside the
+    // workspace, as real paths — the two roots can name the same directory with
+    // and without a symlinked prefix (`/private/var` against `/var` on macOS),
+    // and comparing those two strings here would decide the file is outside the
+    // workspace.
+    const prefix = repo?.repo?.workspacePrefix;
+    if (typeof prefix === "string") {
+      return prefix === "." ? filePath : `${prefix}/${filePath}`;
+    }
     const root = String(repo?.repo?.root ?? "").replace(/[/\\]+$/, "");
     const workspace = String(repo?.repo?.workspace ?? "").replace(/[/\\]+$/, "");
-    if (!filePath) return null;
     if (!root || !workspace || root === workspace) return filePath || null;
     if (root.startsWith(`${workspace}/`) || root.startsWith(`${workspace}\\`)) {
       return `${root.slice(workspace.length + 1)}/${filePath}`;
@@ -412,6 +421,9 @@
       commitLang: "",
     };
 
+    // The repository chip comes first, as it does in IDEA: which repository —
+    // and only then which branch of it.
+    const repoHolder = h("div", { style: { display: "contents" } });
     const branchHolder = h("div", { style: { display: "contents" } });
     const toolbar = h("div", { class: "toolbar" });
     const changesList = h("div", { class: "scroll list" });
@@ -452,11 +464,23 @@
     const diffColumn = h("div", { class: "commit-diff column" });
     const divider = h("div", { class: "divider-v draggable", title: "" });
 
+    /**
+     * The repository this window is showing, as the repository list names it:
+     * "." is the workspace's own, anything else sits inside it.
+     */
+    function repositoryLabel() {
+      const entry = state.repo?.repo;
+      if (!entry) return "";
+      return entry.rel && entry.rel !== "." ? entry.rel : entry.name;
+    }
+
     let branchWidget = null;
+    let repoWidget = null;
 
     // --------------------------------------------------------- rendering --
     function paintToolbar() {
       PIG.clear(toolbar);
+      toolbar.append(repoHolder);
       toolbar.append(branchHolder);
       toolbar.append(h("div", { class: "toolbar-separator" }));
       toolbar.append(iconButton("refresh", tip("refresh", KEYS.refresh), () => refresh()));
@@ -477,7 +501,14 @@
       toolbar.append(iconButton("minus", t("unstageFile"), () => stageSelected(false), { disabled: !canUnstageSelected() }));
       toolbar.append(iconButton("rollback", tip("rollback", KEYS.rollback), rollbackSelected, { disabled: !state.selection }));
       toolbar.append(h("div", { class: "toolbar-spacer" }));
-      toolbar.append(h("span", { style: { fontSize: "11px", color: "var(--fg-muted)" }, text: state.repo?.repo?.name ?? "" }));
+      toolbar.append(
+        h("span", {
+          style: { fontSize: "11px", color: "var(--fg-muted)" },
+          // A nested repository is named by where it sits; its bare basename
+          // would not say which one this window is showing.
+          text: repositoryLabel(),
+        }),
+      );
     }
 
     function paintChangesHeader() {
@@ -851,7 +882,10 @@
           title: t("unstageHunk"),
           onSelect: async (hunk) => {
             const patch = PIG.diff.patchFor({ header: currentHeader(), hunks: [hunk] }, [hunk]);
-            report(await invoke("git/apply-patch", { action: "unstage", patch }), t("unstageHunk"));
+            report(
+              await invoke("git/apply-patch", { action: "unstage", patch, root: state.diff?.root }),
+              t("unstageHunk"),
+            );
             await refresh();
           },
         }];
@@ -862,7 +896,10 @@
           title: t("stageHunk"),
           onSelect: async (hunk) => {
             const patch = PIG.diff.patchFor({ header: currentHeader(), hunks: [hunk] }, [hunk]);
-            report(await invoke("git/apply-patch", { action: "stage", patch }), t("stageHunk"));
+            report(
+              await invoke("git/apply-patch", { action: "stage", patch, root: state.diff?.root }),
+              t("stageHunk"),
+            );
             await refresh();
           },
         },
@@ -878,7 +915,10 @@
             });
             if (!confirmed) return;
             const patch = PIG.diff.patchFor({ header: currentHeader(), hunks: [hunk] }, [hunk]);
-            report(await invoke("git/apply-patch", { action: "discard", patch }), t("discardHunk"));
+            report(
+              await invoke("git/apply-patch", { action: "discard", patch, root: state.diff?.root }),
+              t("discardHunk"),
+            );
             await refresh();
           },
         },
@@ -907,7 +947,14 @@
               const isIndex = group === "staged";
               if (checked === isIndex) return;
               const patch = PIG.diff.patchFor({ header: currentHeader(), hunks: [hunk] }, [hunk]);
-              report(await invoke("git/apply-patch", { action: checked ? "stage" : "unstage", patch }), t("includeIntoCommit"));
+              report(
+                await invoke("git/apply-patch", {
+                  action: checked ? "stage" : "unstage",
+                  patch,
+                  root: state.diff?.root,
+                }),
+                t("includeIntoCommit"),
+              );
               await refresh();
             },
           })
@@ -1396,6 +1443,20 @@
     ]));
 
     branchWidget = mountBranchWidget(branchHolder, { onChanged: () => refresh() });
+    /**
+     * Switching repository is a view-wide change, so it drops what the leaving
+     * repository owned *before* the reload starts rather than after it ends: a
+     * hunk button left in the diff pane stays clickable for the length of a
+     * refresh, and a hunk action is a real edit — `discard` writes to the
+     * worktree — so it would land in whichever repository is current by then.
+     */
+    repoWidget = PIG.repoSelector.mount(repoHolder, {
+      onSwitch: () => {
+        forgoRepositoryState();
+        paintAll();
+        refresh().catch(() => {});
+      },
+    });
 
     PIG.bindSplitter(divider, (delta) => {
       const total = root.clientWidth || 1;
@@ -1404,14 +1465,37 @@
     });
 
     // ------------------------------------------------------------- refresh --
+    /**
+     * Which repository the loaded state belongs to, so a switch can be told
+     * apart from an ordinary refresh: a selection, a filter and a rendered diff
+     * are all repository-relative, and carrying them across would show — and
+     * stage — the wrong file. `undefined` means nothing has been loaded yet.
+     */
+    let loadedRepo;
+
+    /** Drop everything that describes one repository, and only that one. */
+    function forgoRepositoryState() {
+      state.selection = null;
+      state.diff = null;
+      state.filter = "";
+    }
+
     async function refresh() {
       const result = await invoke("git/repo");
       if (!result.ok) {
         state.repo = null;
         state.error = result.message ?? t("notARepository");
+        // Nothing is loaded, so nothing repository-relative may stay on screen
+        // — and the next repository to load must not be mistaken for the same
+        // one continuing.
+        forgoRepositoryState();
+        loadedRepo = undefined;
         paintAll();
         return state.repo ?? {};
       }
+      const repoRoot = result.repo?.root ?? null;
+      if (loadedRepo !== undefined && repoRoot !== loadedRepo) forgoRepositoryState();
+      loadedRepo = repoRoot;
       state.repo = result;
       state.error = null;
       // Drop a selection whose file left the change lists.
@@ -1445,9 +1529,20 @@
       if (typeof ui.compactDirs === "boolean") state.compactDirs = ui.compactDirs;
     }
 
+    /**
+     * The repository list, read when it can actually have changed — mounting,
+     * a project switch, and opening the chip's menu (which re-reads its own) —
+     * rather than on every refresh. Finding the nested repositories walks the
+     * tree, and a refresh happens after every stage, commit and branch action.
+     */
+    async function loadRepositories() {
+      repoWidget.update(await invoke("git/repos"));
+    }
+
     (async () => {
       try {
         await loadPrefs();
+        await loadRepositories();
         await refresh();
       } catch (error) {
         // Without this the view would fail silently on first paint.
@@ -1456,7 +1551,10 @@
     })();
 
     window.addEventListener("pig:appearance", () => paintAll());
-    PIG.watchWorkspace(() => { refresh().catch(() => {}); });
+    PIG.watchWorkspace(() => {
+      // A project switch invalidates the list as much as the repository.
+      loadRepositories().then(() => refresh()).catch(() => {});
+    });
 
     PIG.bindShortcuts([
       { spec: KEYS.refresh, run: () => { refresh().catch(() => {}); } },

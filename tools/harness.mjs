@@ -14,7 +14,7 @@
  * Run: node tools/harness.mjs [--keep]
  */
 import { execFileSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
@@ -428,6 +428,240 @@ async function main() {
     const after = await call(world.work, "git/repo");
     eq("nothing is in progress any more", after.operation, null);
     eq("the pick landed", subject(world.work), "theirs");
+  }
+
+  // 11. A repository inside a repository: a submodule, and a clone that is not
+  // one. Both are separate repositories, so every command has to be able to
+  // point at either — which is what picking one in the repository list does.
+  section("nested repositories");
+  {
+    const base = join(ROOT, "nested");
+    mkdirSync(base, { recursive: true });
+
+    // What the submodule points at, with a history of its own.
+    const inner = initRepo(join(base, "inner"), "inner");
+    write(inner, "pointed.txt", "inner\n");
+    commitAll(inner, "inner base");
+
+    const outer = initRepo(join(base, "outer"), "outer");
+    write(outer, "base.txt", "base\n");
+    commitAll(outer, "base");
+    git(outer, ["-c", "protocol.file.allow=always", "submodule", "add", "-q", "../inner", "mod"]);
+    commitAll(outer, "add submodule");
+    write(join(outer, "mod"), "pointed.txt", "changed inside\n");
+    git(join(outer, "mod"), ["add", "pointed.txt"]);
+    git(join(outer, "mod"), ["commit", "-qm", "inside the submodule"]);
+
+    // A repository that merely lives inside the outer one: no `.gitmodules`
+    // entry, no gitlink in the parent's index, nothing the parent stores.
+    const vendored = initRepo(join(outer, "vendor-tools"), "vendor");
+    write(vendored, "n.txt", "n\n");
+    commitAll(vendored, "vendored base");
+
+    const list = await call(outer, "git/repos");
+    eq("the workspace's own repository is listed first", list.repos[0].rel, ".");
+    eq("as the active one", list.repos[0].active, true);
+    eq("the submodule is listed where it sits", list.repos[1].rel, "mod");
+    eq("and named a submodule", list.repos[1].kind, "submodule");
+    eq("a nested repository without a submodule entry is listed too", list.repos[2].rel, "vendor-tools");
+    eq("told apart from a submodule", list.repos[2].kind, "nested");
+    eq("with nothing else invented", list.repos.length, 3);
+    eq("and nothing picked to begin with", list.active, ".");
+
+    // Picking one redirects every command, not just the list. The path handed
+    // over is the raw `mkdtemp` path while Git answers with the real one, so
+    // this also covers the comparison that decides "inside the workspace".
+    const picked = await call(outer, "git/select-repo", { root: join(outer, "mod") });
+    eq("picking the submodule succeeds", picked.ok, true);
+    eq("and reports it as the active one", picked.active, "mod");
+
+    const inside = await call(outer, "git/repo");
+    eq("the status is the submodule's", inside.repo.rel, "mod");
+    eq("which is clean where the parent is not", inside.unstaged.length, 0);
+    eq("where the repository sits inside the workspace is computed for the host's fs channels", inside.repo.workspacePrefix, "mod");
+    const insideLog = await call(outer, "git/log", { limit: 5 });
+    eq("and the log is the submodule's own history", insideLog.commits[0].subject, "inside the submodule");
+
+    // A change made inside it is what the parent could never show as a file.
+    write(join(outer, "mod"), "pointed.txt", "edited from the plugin\n");
+    const dirty = await call(outer, "git/repo");
+    eq("a change inside the submodule is listed here", dirty.unstaged[0].path, "pointed.txt");
+    eq("as an ordinary file change, not as a submodule", dirty.unstaged[0].submodule, false);
+
+    write(join(outer, "mod"), "from-here.txt", "written from the plugin\n");
+    const stagedInside = await call(outer, "git/stage", { paths: ["from-here.txt", "pointed.txt"] });
+    eq("files inside the submodule can be staged from the plugin", stagedInside.ok, true);
+    const committedInside = await call(outer, "git/commit", { message: "committed from the plugin" });
+    eq("and committed from it", committedInside.ok, true);
+    eq("into the submodule's history", subject(join(outer, "mod")), "committed from the plugin");
+
+    await call(outer, "git/select-repo", { root: outer });
+    const parent = await call(outer, "git/repo");
+    eq("the workspace's own repository is active again", parent.repo.rel, ".");
+    eq("and reports the submodule's new commit", parent.unstaged[0].path, "mod");
+    eq("as the commit it points at", parent.unstaged[0].sub.commits, true);
+    eq("rather than a change it could make itself", parent.unstaged[0].insideSubmodule, false);
+    eq("while the nested repository stays one unversioned entry", parent.untracked[0].path, "vendor-tools/");
+
+    // The bridge forwards any path a view sends, so the engine keeps its own
+    // boundary: only a repository root inside this workspace may be picked.
+    eq("a file is not a repository root", (await call(outer, "git/select-repo", { root: join(outer, "base.txt") })).ok, false);
+    eq("and a repository outside the workspace is refused", (await call(outer, "git/select-repo", { root: inner })).ok, false);
+    eq("a refusal leaves the current choice alone", (await call(outer, "git/repo")).repo.rel, ".");
+
+    // The plugin process outlives a project switch, so a choice made in one
+    // project must not follow the user into the next.
+    const elsewhere = initRepo(join(base, "elsewhere"), "elsewhere");
+    write(elsewhere, "z.txt", "z\n");
+    commitAll(elsewhere, "elsewhere base");
+    await call(outer, "git/select-repo", { root: join(outer, "vendor-tools") });
+    eq("a nested repository can be the active one", (await call(outer, "git/repo")).repo.rel, "vendor-tools");
+    const switched = await call(elsewhere, "git/repo");
+    eq("switching project drops the choice", switched.repo.rel, ".");
+    eq("and reads the new project's repository", switched.repo.name, "elsewhere");
+  }
+
+  // 12. How far the scan looks, and what a declaration overrides.
+  section("repository scan bounds");
+  {
+    const base = join(ROOT, "bounds");
+    mkdirSync(base, { recursive: true });
+
+    const inner = initRepo(join(base, "inner"), "inner");
+    write(inner, "pointed.txt", "inner\n");
+    commitAll(inner, "inner base");
+
+    const outer = initRepo(join(base, "outer"), "outer");
+    write(outer, "base.txt", "base\n");
+    commitAll(outer, "base");
+    // Four levels down: found. One level deeper: past the bound. A dependency
+    // tree: not walked at all. Each needs a commit, or `git add -A` in the
+    // parent refuses the embedded repository.
+    for (const [relative, name] of [["a/b/c/d", "deep"], ["x/y/z/w/v", "past"], ["node_modules/pkg", "dependency"]]) {
+      const repository = initRepo(join(outer, relative), name);
+      write(repository, "here.txt", `${name}\n`);
+      commitAll(repository, `${name} base`);
+    }
+
+    const rels = (await call(outer, "git/repos")).repos.map((entry) => entry.rel);
+    eq("a repository at the depth limit is found", rels.includes("a/b/c/d"), true);
+    eq("one past it is not", rels.includes("x/y/z/w/v"), false);
+    eq("and a dependency tree is not walked", rels.includes("node_modules/pkg"), false);
+
+    // `.gitmodules` is a statement about the project, while the scan's bounds
+    // are a guess about its size — so a declared submodule is listed either way.
+    // `submodule add` stages its own gitlink, so nothing else needs committing.
+    git(outer, ["-c", "protocol.file.allow=always", "submodule", "add", "-q", "../inner", "x/y/z/w/mod"]);
+    const declared = (await call(outer, "git/repos")).repos.find((entry) => entry.rel === "x/y/z/w/mod");
+    eq("a declared submodule past the bound is still listed", Boolean(declared), true);
+    eq("named as what it is", declared?.kind, "submodule");
+    await call(outer, "git/select-repo", { root: outer });
+  }
+
+  // 13. A submodule of a submodule, a repository that disappears, and a
+  // workspace that is a subdirectory of its own repository.
+  section("nested repositories, harder cases");
+  {
+    const base = join(ROOT, "deeper");
+    mkdirSync(base, { recursive: true });
+
+    const inner = initRepo(join(base, "inner"), "inner");
+    write(inner, "pointed.txt", "inner\n");
+    commitAll(inner, "inner base");
+
+    const outer = initRepo(join(base, "outer"), "outer");
+    write(outer, "base.txt", "base\n");
+    commitAll(outer, "base");
+    git(outer, ["-c", "protocol.file.allow=always", "submodule", "add", "-q", "../inner", "mod"]);
+    commitAll(outer, "add submodule");
+    // A submodule *of* the submodule: the classification question has to be put
+    // to `mod`'s index, in `mod`'s terms.
+    // The source is named absolutely: a relative one is resolved from the
+    // superproject, which here is `mod` itself.
+    git(join(outer, "mod"), ["-c", "protocol.file.allow=always", "submodule", "add", "-q", inner, "dep"]);
+    commitAll(join(outer, "mod"), "add its own submodule");
+
+    const list = await call(outer, "git/repos");
+    const dep = list.repos.find((entry) => entry.rel === "mod/dep");
+    eq("a submodule of a submodule is listed", Boolean(dep), true);
+    eq("and classified by the repository that holds it", dep?.kind, "submodule");
+
+    // A repository that is taken away between two refreshes: the choice has to
+    // become the workspace's own repository again rather than fail.
+    const scratch = initRepo(join(outer, "scratch-repo"), "scratch");
+    write(scratch, "s.txt", "s\n");
+    commitAll(scratch, "scratch base");
+    await call(outer, "git/select-repo", { root: scratch });
+    eq("a nested repository can be selected", (await call(outer, "git/repo")).repo.rel, "scratch-repo");
+    rmSync(join(scratch, ".git"), { recursive: true, force: true });
+    const afterRemoval = await call(outer, "git/repo");
+    eq("a repository that stops being one falls back to the workspace's", afterRemoval.repo.rel, ".");
+    eq("without failing the read", afterRemoval.ok, true);
+    rmSync(scratch, { recursive: true, force: true });
+
+    // A workspace *inside* the repository: the repository is then not inside the
+    // workspace, and saying it is would send "Open File" to `app/app/f.txt`.
+    const nestedWorkspace = join(outer, "app");
+    mkdirSync(nestedWorkspace, { recursive: true });
+    write(outer, "app/f.txt", "f\n");
+    commitAll(outer, "a file under the workspace");
+    const insideWorkspace = await call(nestedWorkspace, "git/repo");
+    eq("the repository is still found from a subdirectory", insideWorkspace.ok, true);
+    eq("as the repository the workspace sits in", insideWorkspace.repo.rel, ".");
+    eq("with no workspace-relative prefix, because the file paths are already relative to it", insideWorkspace.repo.workspacePrefix, null);
+
+    const refusedFile = await call(outer, "git/select-repo", { root: join(outer, "base.txt") });
+    eq("a file is refused with its reason", refusedFile.ok, false);
+    includes("and says what is wrong with it", refusedFile.message, "Not a repository inside this workspace");
+    const refusedOutside = await call(outer, "git/select-repo", { root: inner });
+    eq("so is a repository that is not the workspace's own", refusedOutside.ok, false);
+    includes("with the same reason", refusedOutside.message, "Not a repository inside this workspace");
+  }
+
+  // 14. Diffs and patches: an empty diff is not proof of nothing to show, and a
+  // patch belongs to the repository it came from.
+  section("diffs and patches");
+  {
+    const base = join(ROOT, "diffs");
+    mkdirSync(base, { recursive: true });
+    const repo = initRepo(join(base, "work"), "worker");
+    write(repo, "tracked.txt", "one\n");
+    commitAll(repo, "base");
+
+    // A clean, tracked file: the diff is empty, but the file is not new.
+    const clean = await call(repo, "git/diff", { path: "tracked.txt", mode: "worktree" });
+    eq("a clean tracked file produces no diff", clean.text.trim(), "");
+    excludes("and is not rendered as an addition", clean.text, "new file mode");
+
+    // An untracked file has no index entry to diff against, so it is rendered
+    // as a whole-file addition — that is what the fallback is for.
+    write(repo, "untracked.txt", "two\n");
+    const untracked = await call(repo, "git/diff", { path: "untracked.txt", mode: "worktree" });
+    includes("an untracked file is rendered as an addition", untracked.text, "new file mode");
+    includes("with its content", untracked.text, "+two");
+
+    write(repo, "tracked.txt", "one\nchanged\n");
+    const dirty = await call(repo, "git/diff", { path: "tracked.txt", mode: "worktree" });
+    includes("a modified tracked file shows the change", dirty.text, "+changed");
+    excludes("and never as an addition", dirty.text, "new file mode");
+    eq("while carrying the repository it was read from", dirty.root, realpathSync(repo));
+
+    // A patch is refused once the repository has moved on, rather than applied
+    // to whatever repository is current: `discard` writes to the worktree. The
+    // patch itself is the forward diff, as `git/diff` hands it over — `discard`
+    // applies it in reverse.
+    const patch = "diff --git a/tracked.txt b/tracked.txt\n--- a/tracked.txt\n+++ b/tracked.txt\n@@ -1 +1,2 @@\n one\n+changed\n";
+    const stale = await call(join(base, "work"), "git/apply-patch", {
+      action: "discard",
+      patch,
+      root: join(base, "elsewhere"),
+    });
+    eq("a patch from another repository is refused", stale.ok, false);
+    eq("with a code the view can act on", stale.code, "STALE_REPOSITORY");
+    includes("and the file is untouched", execFileSync("git", ["diff", "--", "tracked.txt"], { cwd: repo, encoding: "utf8" }), "+changed");
+    const applied = await call(repo, "git/apply-patch", { action: "discard", patch, root: repo });
+    eq("the same patch applies to the repository it came from", applied.ok, true);
+    eq("removing the change", execFileSync("git", ["diff", "--", "tracked.txt"], { cwd: repo, encoding: "utf8" }).trim(), "");
   }
 
   // ------------------------------------------------------------------ result ---
