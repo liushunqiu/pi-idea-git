@@ -1,10 +1,30 @@
 {
   "schemaVersion": 1,
-  "id": "local.pi-idea-git",
+  "id": "io.github.liushunqiu.pi-idea-git",
   "name": "IDEA Git",
   "version": "0.2.0",
   "description": "An IntelliJ-IDEA-style Git tool window for PI-Desktop: staged/unstaged change lists, hunk-level stage & revert, commit, branch switcher, graph log and stashes. IDEA Git 风格的 Git 工具窗口：暂存/未暂存分组、按代码块暂存与还原、提交、分支切换、图形化日志与储藏。",
-  "author": "local",
+  "author": "liushunqiu",
+  "homepage": "https://github.com/liushunqiu/pi-idea-git",
+  "repository": "https://github.com/liushunqiu/pi-idea-git",
+  "i18n": {
+    "en": {
+      "name": "IDEA Git",
+      "description": "An IntelliJ-IDEA-style Git tool window for PI-Desktop: staged/unstaged change lists, hunk-level stage & revert, commit, branch switcher, graph log and stashes.",
+      "safetyNotes": "Reads workspace files through the host fs APIs (Open File / Reveal only); discarding an untracked file deletes it (with a confirmation dialog) — every other write goes through Git commands. Commit-message generation calls the host model with your own model setup and quota (host rate limit 8/min); the plugin holds no API keys, makes no network requests, no telemetry. HTTPS credentials come from your own Git credential helper; keys that live only in ssh-agent do not work — use an HTTPS remote or a keychain-backed key."
+    },
+    "zh-CN": {
+      "name": "IDEA Git",
+      "description": "PI-Desktop 的 IDEA 风格 Git 工具窗口：暂存/未暂存分组、按代码块暂存与还原、提交、分支切换、图形化日志与储藏。",
+      "safetyNotes": "只读工作区文件（Open File / Reveal 走宿主 fs 接口）；丢弃未跟踪文件时会直接删除该文件（操作前有确认框），其余写操作一律走 Git 命令。生成提交信息调用宿主模型，用的是你自己的模型配置与额度（宿主限流 8 次/分），插件不持有任何 API Key，不发起网络请求，无遥测。HTTPS 凭据走你自己的 Git 凭据助手；只活在 ssh-agent 里的密钥用不了，请用 HTTPS 远端或钥匙串密钥。"
+    }
+  },
+  "categories": [
+    "developer-tools",
+    "productivity"
+  ],
+  "changelog": "Release 0.2.0: IDEA-style Commit and Git tool windows (staged/unstaged/conflict/untracked groups, hunk stage/revert, graph log, branches, stashes, console); multi-repository and submodule aggregation with a per-repo push dialog; classified push/pull conflict remedies with lease-only force push; host-model commit-message drafting with a language menu. Published as io.github.liushunqiu.pi-idea-git (renamed from local.pi-idea-git; per-plugin prefs start fresh).",
+  "safetyNotes": "只读工作区文件（Open File / Reveal 走宿主 fs 接口）；丢弃未跟踪文件时会直接删除该文件（操作前有确认框），其余写操作一律走 Git 命令。生成提交信息调用宿主模型，用的是你自己的模型配置与额度（宿主限流 8 次/分），插件不持有任何 API Key，不发起网络请求，无遥测。HTTPS 凭据走你自己的 Git 凭据助手；只活在 ssh-agent 里的密钥用不了，请用 HTTPS 远端或钥匙串密钥。",
   "main": "main.js",
   "ui": {
     "panel": "renderer/index.html",

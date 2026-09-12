@@ -1,6 +1,6 @@
 # IDEA Git —— PI-Desktop 的 IntelliJ IDEA 风格 Git 工具窗口
 
-`local.pi-idea-git` 把 IntelliJ IDEA 的 Git 界面搬进 PI-Desktop：你真的会一直待在里面的那两个
+`io.github.liushunqiu.pi-idea-git` 把 IntelliJ IDEA 的 Git 界面搬进 PI-Desktop：你真的会一直待在里面的那两个
 工具窗口、暂存/未暂存分组、按代码块（hunk）暂存、图形化日志与 Console。
 
 这里的每一个 Git 动作都是**真的去调 `git`**，对着真实的索引干活。没有任何功能是在渲染层
@@ -485,7 +485,8 @@ node tools/build.mjs && node tools/smoke.mjs commit zh-CN
 
 1. 扩展页右上角 **`···` → 「加载本地插件」** → 选这个目录。
 2. 改 `src/`，跑 `node tools/build.mjs`，视图会热重载。
-3. `PluginCheck` 然后 `PluginPack`，产出 `dist/local.pi-idea-git-0.2.0.piplug`。
+3. 组装干净的发布目录再打 Pack：`node tools/build.mjs && node tools/make-publish-dir.mjs`，然后对 `dist-publish/io.github.liushunqiu.pi-idea-git/` 跑 `PluginCheck` / `PluginPack`（产物在该目录的 `dist/*.piplug`，8 个文件约 0.9MB）。**不要直接对仓库根打 Pack**——它会把 `.smoke/`、`.memories/`、`tools/`、`src/` 等开发文件一起打进去（`PluginPack` 不读 `.gitignore`，且没有排除文件机制，实测 2.1MB / 46 文件）。
+   从老 ID `local.pi-idea-git` 升级上来的用户，提交信息历史与视图选项不会迁移（插件数据目录按 ID 隔离）。
 
 质量底线（改完代码过一遍）：`node --check` 每个 `src/*.js`、`PluginCheck` 无 error、`node tools/harness.mjs` 全绿。
 
