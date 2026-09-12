@@ -13,7 +13,7 @@
 (function (PIG) {
   "use strict";
 
-  const { h, t } = PIG;
+  const { h, t, tf } = PIG;
 
   const HUNK_HEADER = /^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@ ?(.*)$/;
 
@@ -383,10 +383,11 @@ function markSubmodule(hunk) {
   }
 
   function collapsedRow(lines, options) {
+    // Whole sentence per locale via tf; `s` feeds the English plural only.
     const node = h("div", {
       class: "diff-collapsed",
       title: t("collapseUnchanged"),
-      text: `⋮ ${lines.length} ${PIG.state.locale === "zh-CN" ? "行未修改" : `unchanged line${lines.length === 1 ? "" : "s"}`}`,
+      text: tf("collapsedLines", { count: lines.length, s: lines.length === 1 ? "" : "s" }),
     });
     node.addEventListener("click", () => {
       const replacement = document.createDocumentFragment();
@@ -398,6 +399,10 @@ function markSubmodule(hunk) {
 
   /**
    * Render a diff into `container`.
+   *
+   * TODO: large-diff virtualization is out of scope — rendering stays
+   * non-virtualized; a windowed renderer would be a wide change, so huge
+   * patches still render in full here.
    *
    * options:
    *   unified          boolean — side-by-side when false

@@ -664,6 +664,99 @@ async function main() {
     eq("the same patch applies to the repository it came from", applied.ok, true);
     eq("removing the change", execFileSync("git", ["diff", "--", "tracked.txt"], { cwd: repo, encoding: "utf8" }).trim(), "");
   }
+  // 15. Multi-repo push: `git/push` with `repoRoot` and `git/push-statuses`.
+  section("multi-repo push");
+  {
+    const base = join(ROOT, "multipush");
+    mkdirSync(base, { recursive: true });
+    const parentOrigin = bareRepo(base, "parent-origin");
+    const subOrigin = bareRepo(base, "sub-origin");
+    const inner = initRepo(join(base, "inner"), "inner");
+    write(inner, "pointed.txt", "inner\\n");
+    commitAll(inner, "inner base");
+    git(inner, ["remote", "add", "origin", subOrigin]);
+    git(inner, ["push", "-q", "-u", "origin", "main"]);
+    const outer = initRepo(join(base, "outer"), "outer");
+    write(outer, "base.txt", "base\\n");
+    commitAll(outer, "base");
+    git(outer, ["remote", "add", "origin", parentOrigin]);
+    git(outer, ["push", "-q", "-u", "origin", "main"]);
+    git(outer, ["-c", "protocol.file.allow=always", "submodule", "add", "-q", "../sub-origin.git", "mod"]);
+    commitAll(outer, "add submodule");
+    git(outer, ["push", "-q", "origin", "main"]);
+    const mod = join(outer, "mod");
+    // New commits on both sides, made with plain git so the push path is isolated.
+    write(mod, "from-sub.txt", "sub\\n");
+    git(mod, ["add", "from-sub.txt"]);
+    git(mod, ["commit", "-qm", "sub change"]);
+    write(outer, "from-parent.txt", "parent\\n");
+    git(outer, ["add", "from-parent.txt"]);
+    git(outer, ["commit", "-qm", "parent change"]);
+    const statuses = await call(outer, "git/push-statuses");
+    eq("push-statuses succeeds", statuses.ok, true);
+    const rels = (statuses.repos ?? []).map((entry) => entry.rel);
+    eq("the parent is listed", rels.includes("."), true);
+    eq("the submodule is listed", rels.includes("mod"), true);
+    const subEntry = (statuses.repos ?? []).find((entry) => entry.rel === "mod");
+    eq("the submodule reports its branch", subEntry?.branch?.head, "main");
+    eq("and where a push would go", subEntry?.pushTarget?.remote, "origin");
+    // Push the submodule without switching the selector: the failure mode this
+    // used to require a switch for.
+    const pushedSub = await call(outer, "git/push", { repoRoot: mod });
+    eq("pushing the submodule by path succeeds", pushedSub.ok, true);
+    eq("and the submodule remote moved", git(base, ["--git-dir", "sub-origin.git", "rev-parse", "main"]).trim(), head(mod));
+    eq("while the selector still points at the parent", (await call(outer, "git/repo")).repo.rel, ".");
+    const pushedParent = await call(outer, "git/push", {});
+    eq("pushing the parent directly still works", pushedParent.ok, true);
+    eq("and its remote moved", git(base, ["--git-dir", "parent-origin.git", "rev-parse", "main"]).trim(), head(outer));
+    const outside = await call(outer, "git/push", { repoRoot: inner });
+    eq("a repoRoot outside the workspace is refused", outside.ok, false);
+    await call(outer, "git/select-repo", { root: outer });
+  }
+
+  // 16. Sibling workspaces: a plain folder containing repositories.
+  section("sibling workspaces");
+  {
+    const base = join(ROOT, "siblings");
+    const proj = join(base, "proj");
+    mkdirSync(proj, { recursive: true });
+    const originA = bareRepo(base, "a-origin");
+    const originB = bareRepo(base, "b-origin");
+    const repoA = initRepo(join(proj, "repoA"), "a");
+    write(repoA, "a.txt", "a\\n");
+    commitAll(repoA, "a base");
+    git(repoA, ["remote", "add", "origin", originA]);
+    git(repoA, ["push", "-q", "-u", "origin", "main"]);
+    const repoB = initRepo(join(proj, "repoB"), "b");
+    write(repoB, "b.txt", "b\\n");
+    commitAll(repoB, "b base");
+    git(repoB, ["remote", "add", "origin", originB]);
+    git(repoB, ["push", "-q", "-u", "origin", "main"]);
+    const list = await call(proj, "git/repos");
+    eq("a plain folder still lists its repositories", list.ok, true);
+    eq("both siblings are listed", list.repos.length, 2);
+    eq("as siblings, not nested", list.repos.every((entry) => entry.kind === "sibling"), true);
+    const current = await call(proj, "git/repo");
+    eq("the folder resolves to a repository instead of failing", current.ok, true);
+    eq("in sibling mode", current.siblingMode, true);
+    eq("starting with the first sibling", current.repo.rel, "repoA");
+    // Dirty the other sibling: the aggregated statuses should surface it
+    // without switching, the way dirty submodules surface in a parent.
+    write(repoB, "b.txt", "b\\nchanged\\n");
+    const subs = await call(proj, "git/submodule-statuses");
+    eq("the dirty sibling is aggregated", subs.ok && subs.submodules.some((entry) => entry.rel === "repoB"), true);
+    write(repoB, "more.txt", "more\\n");
+    git(repoB, ["add", "more.txt"]);
+    git(repoB, ["commit", "-qm", "b change"]);
+    const statuses = await call(proj, "git/push-statuses");
+    eq("push-statuses lists both siblings", statuses.ok && statuses.repos.length === 2, true);
+    const pushedB = await call(proj, "git/push", { repoRoot: repoB });
+    eq("a sibling pushes by path", pushedB.ok, true);
+    eq("and its remote moved", git(base, ["--git-dir", "b-origin.git", "rev-parse", "main"]).trim(), head(repoB));
+    const picked = await call(proj, "git/select-repo", { root: repoB });
+    eq("switching siblings works", picked.ok && picked.active === "repoB", true);
+    eq("and reads that sibling", (await call(proj, "git/repo")).repo.rel, "repoB");
+  }
 
   // ------------------------------------------------------------------ notes ---
   // The decision records in `.agents/notes/` carry what the code cannot: why this

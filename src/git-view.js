@@ -29,6 +29,8 @@
 
   const ROW_HEIGHT = 34;
   const LANE_WIDTH = 14;
+  // TODO: LANE_COLORS theming is out of scope — these fixed hues stay as-is;
+  // moving them into theme.css variables would touch every graph painter.
   const LANE_COLORS = ["#4a86c8", "#3fb28a", "#c9a227", "#b06bc0", "#d1743a", "#6aa84f", "#c05555", "#5f7fd4"];
   const SVG_NS = "http://www.w3.org/2000/svg";
 
@@ -283,6 +285,11 @@
       toolbar.append(branchHolder);
       toolbar.append(h("div", { class: "toolbar-separator" }));
       toolbar.append(iconButton("refresh", tip("refresh", KEYS.refresh), () => refresh()));
+      toolbar.append(iconButton("push", t("push"), async () => {
+        // Note: Git 视图的 Push 同样走多仓对话框，单仓时对话框内只有一行 — 见 .agents/notes/implemented/architecture/2026-09-12-multi-repo-push.md
+        await PIG.openPushDialog({ onPushed: async () => { await refresh(); } });
+        await refresh();
+      }));
       // Held in a variable so the Find shortcut can open the same popup.
       searchButton = iconButton("search", tip("search", KEYS.find), (event) => {
         const field = h("input", { type: "text", value: state.search, placeholder: t("search") });

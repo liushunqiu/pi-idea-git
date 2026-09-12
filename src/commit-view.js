@@ -393,33 +393,44 @@
 
   // ---------------------------------------------------------- commit view ---
   function mount(root, options) {
-    const state = {
-      repo: null,
-      error: null,
-      busy: false,
-      selection: null,
-      diff: null,
-      diffUnified: true,
-      showWhitespaces: false,
-      showLineNumbers: false,
-      ignoreWhitespace: false,
-      message: "",
-      amend: false,
-      signoff: false,
-      messages: [],
-      // Both keyed by group, because collapsing `src/` in Unversioned must not
-      // collapse it in Unstaged too.
-      collapsed: new Set(),
-      filter: "",
-      // IDEA's view options for the changes tree, persisted with the rest.
-      groupByDirectory: true,
-      compactDirs: true,
-      changesWidth: 45,
-      generating: false,
-      commitModelKey: "",
-      // Empty means `auto`; the plugin resolves it against the repository.
-      commitLang: "",
-    };
+     const state = {
+       repo: null,
+       error: null,
+       busy: false,
+       selection: null,
+       diff: null,
+       diffUnified: true,
+       showWhitespaces: false,
+       showLineNumbers: false,
+       ignoreWhitespace: false,
+       message: "",
+       amend: false,
+       signoff: false,
+       messages: [],
+       // Both keyed by group, because collapsing `src/` in Unversioned must not
+       // collapse it in Unstaged too.
+       collapsed: new Set(),
+       filter: "",
+       // IDEA's view options for the changes tree, persisted with the rest.
+       groupByDirectory: true,
+       compactDirs: true,
+       changesWidth: 45,
+       generating: false,
+       commitModelKey: "",
+       // Empty means `auto`; the plugin resolves it against the repository.
+       commitLang: "",
+      // Aggregated submodule statuses (IDEA-like): each entry is
+      // `{ rel, root, name, kind, status }` where `status` is a `readStatus`
+      // result for that submodule. The parent's `git status` only prints one
+      // gitlink line per submodule, so without this the files changed inside
+      // `backend` are invisible while the selector points at the parent.
+      // In sibling mode the same slots hold the other sibling repos.
+      submodules: [],
+      subLoading: false,
+      // Last `git/repos` answer: decides whether the toolbar Push opens the
+      // multi-repo dialog instead of pushing the current repo directly.
+      allRepos: [],
+     };
 
     // The repository chip comes first, as it does in IDEA: which repository —
     // and only then which branch of it.
@@ -473,6 +484,84 @@
       if (!entry) return "";
       return entry.rel && entry.rel !== "." ? entry.rel : entry.name;
     }
+     /**
+      * Aggregated-view contexts: the current repo is ".", each dirty submodule
+      * is its `rel` (e.g. "backend"). A context carries the absolute root helm
+      * actions at, plus the repo object `workspaceRelative` needs for open/reveal.
+      */
+     function rootCtx() {
+       return {
+         rk: ".",
+         root: state.repo?.repo?.root ?? null,
+         label: repositoryLabel(),
+         repoObj: state.repo ?? null,
+         status: state.repo ?? null,
+         kind: "root",
+         branch: state.repo?.branch ?? null,
+       };
+     }
+     function subCtx(entry) {
+       return {
+         rk: entry.rel,
+         root: entry.root,
+         label: entry.rel,
+         repoObj: { repo: entry.status?.repo ?? { root: entry.root } },
+         status: entry.status,
+         kind: entry.kind ?? "submodule",
+         branch: entry.status?.branch ?? null,
+       };
+     }
+     function allCtxs() {
+       const out = [];
+       if (state.repo) out.push(rootCtx());
+       for (const entry of state.submodules ?? []) out.push(subCtx(entry));
+       return out;
+     }
+     function branchNameOf(branch) {
+       if (!branch) return "";
+       if (branch.head) return branch.head;
+       if (branch.detached) return `detached @ ${String(branch.oid ?? "").slice(0, 8)}`;
+       return "";
+     }
+     function countsOf(status) {
+       if (!status) return { staged: 0, unstaged: 0, untracked: 0, conflicted: 0 };
+       return {
+         staged: status.staged?.length ?? 0,
+         unstaged: status.unstaged?.length ?? 0,
+         untracked: status.untracked?.length ?? 0,
+         conflicted: status.conflicted?.length ?? 0,
+       };
+     }
+     function totalCounts() {
+       const total = { staged: 0, unstaged: 0, untracked: 0, conflicted: 0 };
+       for (const ctx of allCtxs()) {
+         const counts = countsOf(ctx.status);
+         total.staged += counts.staged;
+         total.unstaged += counts.unstaged;
+         total.untracked += counts.untracked;
+         total.conflicted += counts.conflicted;
+       }
+       return total;
+     }
+     /** Repos with staged files, submodules first so the parent pointer lands last. */
+     function stagedTargets() {
+       const targets = [];
+       for (const entry of state.submodules ?? []) {
+         if ((entry.status?.staged?.length ?? 0) > 0) targets.push(subCtx(entry));
+       }
+       if ((state.repo?.staged?.length ?? 0) > 0) targets.push(rootCtx());
+       return targets;
+     }
+     async function switchToSubmodule(root) {
+       const switched = await invoke("git/select-repo", { root });
+       if (!switched?.ok) {
+         toast(PIG.errorText(switched), "error");
+         return;
+       }
+       forgoRepositoryState();
+       paintAll();
+       loadRepositories().then(() => refresh()).catch(() => {});
+     }
 
     let branchWidget = null;
     let repoWidget = null;
@@ -489,6 +578,13 @@
         if (report(result, t("fetch"))) await refresh();
       }));
       toolbar.append(iconButton("push", t("push"), async () => {
+        // Note: 多仓走 Push 对话框（逐仓列出去向与结果），单仓保持直推 — 见 .agents/notes/implemented/architecture/2026-09-12-multi-repo-push.md
+        const multi = (state.allRepos?.length ?? 0) > 1 || (state.submodules?.length ?? 0) > 0;
+        if (multi) {
+          await PIG.openPushDialog({ onPushed: async () => { await refresh(); } });
+          await refresh();
+          return;
+        }
         // The engine resolves the target from the branch's own upstream; see
         // the push item in the branch menu.
         const result = await invoke("git/push", { setUpstream: !state.repo?.branch?.upstream });
@@ -511,14 +607,13 @@
       );
     }
 
-    function paintChangesHeader() {
-      PIG.clear(changesHeader);
-      const counts = state.repo
-        ? { staged: state.repo.staged.length, unstaged: state.repo.unstaged.length, untracked: state.repo.untracked.length, conflicted: state.repo.conflicted.length }
-        : { staged: 0, unstaged: 0, untracked: 0, conflicted: 0 };
-      const total = counts.staged + counts.unstaged + counts.untracked + counts.conflicted;
-      changesHeader.append(h("span", { text: t("changes") }));
-      changesHeader.append(h("span", { class: "muted", text: total ? `${total}` : "" }));
+     function paintChangesHeader() {
+       PIG.clear(changesHeader);
+       const counts = totalCounts();
+       const total = counts.staged + counts.unstaged + counts.untracked + counts.conflicted;
+       changesHeader.append(h("span", { text: t("changes") }));
+       changesHeader.append(h("span", { class: "muted", text: total ? `${total}` : "" }));
+       if (state.subLoading) changesHeader.append(h("span", { class: "muted", text: "…" }));
       changesHeader.append(h("div", { class: "toolbar-spacer" }));
       // IDEA puts this search in the changes pane's own title bar: typing is how
       // you find one file among seventy-four, and the tree below narrows to the
@@ -559,22 +654,59 @@
       paintChanges();
     }
 
-    /** Collapse every group and folder — IDEA's "Collapse All". */
+    /** Collapse every group, repository and folder — IDEA's "Collapse All". */
     function collapseAll() {
-      for (const group of GROUPS) state.collapsed.add(group.id);
-      for (const group of GROUPS) {
-        for (const file of state.repo?.[group.id] ?? []) {
-          const parts = file.path.split("/");
-          parts.pop();
-          let prefix = "";
-          for (const part of parts) {
-            prefix = prefix ? `${prefix}/${part}` : part;
-            state.collapsed.add(`dir:${group.id}:${prefix}`);
+      for (const group of GROUPS) state.collapsed.add(`group:${group.id}`);
+      for (const ctx of allCtxs()) {
+        for (const group of GROUPS) state.collapsed.add(`repo:${group.id}:${ctx.rk}`);
+      }
+      for (const ctx of allCtxs()) {
+        for (const group of GROUPS) {
+          for (const file of ctx.status?.[group.id] ?? []) {
+            const parts = file.path.split("/");
+            parts.pop();
+            let prefix = "";
+            for (const part of parts) {
+              prefix = prefix ? `${prefix}/${part}` : part;
+              state.collapsed.add(dirKey(ctx.rk, group.id, prefix));
+            }
           }
         }
       }
       paintChanges();
     }
+
+     /**
+      * Stage (or unstage) every visible file across the current repo and all
+      * aggregated submodules. This fills the view-options menu entries that
+      * previously called a function that did not exist.
+      */
+     async function setAllInclusion(target) {
+       const jobs = [];
+       const filter = state.filter.trim().toLowerCase();
+       for (const ctx of allCtxs()) {
+         const want = target ? "staged" : "worktree";
+         const paths = [];
+         for (const group of GROUPS) {
+           if (group.id === "conflicted") continue;
+           for (const file of ctx.status?.[group.id] ?? []) {
+             if (filter && !file.path.toLowerCase().includes(filter)) continue;
+             const stateName = group.id === "staged" ? "staged" : "worktree";
+             if (stateName === want) continue;
+             paths.push(file.path);
+           }
+         }
+         if (!paths.length) continue;
+         const payload = { paths };
+         if (ctx.root) payload.repoRoot = ctx.root;
+         jobs.push(invoke(target ? "git/stage" : "git/unstage", payload));
+       }
+       if (!jobs.length) return;
+       const results = await Promise.all(jobs);
+       const failed = results.find((result) => !result?.ok);
+       if (failed) toast(PIG.errorText(failed), "error");
+       await refresh();
+     }
 
     /**
      * One checkbox for a set of files. Folder rows pass every file beneath them,
@@ -610,81 +742,89 @@
      * should not be — and leaving alone whatever already matches, because a
      * no-op `git add` still costs a process.
      */
-    function applyInclusion(files, target) {
-      const want = target ? "staged" : "worktree";
-      const paths = files.filter((file) => file.state !== want).map((file) => file.path);
-      if (!paths.length) return Promise.resolve();
-      return invoke(target ? "git/stage" : "git/unstage", { paths }).then(async (result) => {
-        if (!result.ok) {
-          toast(PIG.errorText(result), "error");
-          await refresh();
-          return;
-        }
-        // A folder can hold a submodule. Staging one records the commit it
-        // points at and anything dirty inside it stays dirty, so the row comes
-        // back unselected even though the call succeeded. Say which of the two
-        // happened rather than letting the checkbox look broken.
-        const stuck = target ? files.filter((file) => file.insideSubmodule) : [];
-        await refresh();
-        if (!stuck.length) return;
-        const staged = (state.repo?.staged ?? []).map((entry) => entry.path);
-        if (stuck.some((file) => staged.includes(file.path))) toast(t("submoduleStagedHint"), "info");
-        else toast(PIG.tf("submoduleInside", { path: stuck[0].path }), "error");
-      });
-    }
+     function applyInclusion(files, target, ctx) {
+       const want = target ? "staged" : "worktree";
+       const paths = files.filter((file) => file.state !== want).map((file) => file.path);
+       if (!paths.length) return Promise.resolve();
+       const payload = { paths };
+       if (ctx?.root) payload.repoRoot = ctx.root;
+       return invoke(target ? "git/stage" : "git/unstage", payload).then(async (result) => {
+         if (!result.ok) {
+           toast(PIG.errorText(result), "error");
+           await refresh();
+           return;
+         }
+         // A folder can hold a submodule. Staging one records the commit it
+         // points at and anything dirty inside it stays dirty, so the row comes
+         // back unselected even though the call succeeded. Say which of the two
+         // happened rather than letting the checkbox look broken.
+         // (Submodule inner files render as their own section now, so this
+         // branch only fires for the parent's own gitlink row.)
+         const stuck = target && (!ctx || ctx.rk === ".") ? files.filter((file) => file.insideSubmodule) : [];
+         await refresh();
+         if (!stuck.length) return;
+         const staged = (state.repo?.staged ?? []).map((entry) => entry.path);
+         if (stuck.some((file) => staged.includes(file.path))) toast(t("submoduleStagedHint"), "info");
+         else toast(PIG.tf("submoduleInside", { path: stuck[0].path }), "error");
+       });
+     }
 
-    function fileRow(group, file, depth, fullPath) {
-      const selectionKey = `${group}:${file.path}`;
-      const selected = state.selection === selectionKey;
-      const { name } = splitPath(file.path);
+     function isSelected(rk, group, filePath) {
+       const sel = state.selection;
+       return Boolean(sel) && sel.rk === rk && sel.g === group && sel.p === filePath;
+     }
+     function fileRow(group, file, depth, fullPath, ctx) {
+       const rk = ctx?.rk ?? ".";
+       const selected = isSelected(rk, group, file.path);
+       const { name } = splitPath(file.path);
 
-      return h("div", {
-        class: "tree-row",
-        role: "option",
-        tabindex: "0",
-        "aria-selected": selected ? "true" : "false",
-        title: file.path,
-        onclick: () => select(selectionKey),
-        oncontextmenu: (event) => {
-          event.preventDefault();
-          select(selectionKey);
-          fileContextMenu(event.currentTarget, group, file);
-        },
-      }, [
-        h("span", { class: "indent", style: { width: `${depth * 12}px` } }),
-        rowCheckbox({
-          checked: group === "staged",
-          title: t("includeIntoCommit"),
-          onToggle: (next) => applyInclusion([file], next),
-        }),
-        // Same slots as a folder row — disclosure, icon — so the two line up and
-        // the status letter sits where a folder's arrow is. Without it every
-        // file name would start to the left of the folder it lives in.
-        h("span", { class: "indent", style: { width: "10px" } }),
-        h("span", { class: "status-cell", style: { color: statusColor(file.status) }, text: file.status }),
-        // The directory is the tree now. Repeating it as a grey tail answered
-        // "which folder" worse than the hierarchy does, and the narrow column
-        // clipped it anyway.
-        h("span", { class: "name", style: { color: statusColor(file.status) }, text: name }),
-        // No "partly staged" badge. A file with an index change *and* a further
-        // worktree change already says so the only way Git says it: the same
-        // path is listed here and in the other group, each row carrying its own
-        // status letter. Naming that state separately would invent a concept
-        // the user cannot see in `git status` or in any other Git client.
-        // Inside the tree the folders already answered "where is this", so only
-        // the Flat view repeats the path — and there it is essential, because
-        // nothing else identifies the file. The column is narrow, so the tail
-        // ellipsises and the tooltip keeps the whole path readable.
-        fullPath && file.path !== name
-          ? h("span", { class: "path", title: fullPath, text: fullPath })
-          : null,
-        // A submodule deserves a visible mark: its checkbox means something
-        // different from every other row's.
-        file.submodule
-          ? h("span", { class: "badge", text: t("submoduleBadge"), title: submoduleTooltip(file) })
-          : null,
-      ]);
-    }
+       return h("div", {
+         class: "tree-row",
+         role: "option",
+         tabindex: "0",
+         "aria-selected": selected ? "true" : "false",
+         title: ctx && ctx.rk !== "." ? `${ctx.rk}/${file.path}` : file.path,
+         onclick: () => select({ rk, g: group, p: file.path, root: ctx?.root ?? null }),
+         oncontextmenu: (event) => {
+           event.preventDefault();
+           select({ rk, g: group, p: file.path, root: ctx?.root ?? null });
+           fileContextMenu(event.currentTarget, group, file, ctx);
+         },
+       }, [
+         h("span", { class: "indent", style: { width: `${depth * 12}px` } }),
+         rowCheckbox({
+           checked: group === "staged",
+           title: t("includeIntoCommit"),
+           onToggle: (next) => applyInclusion([{ ...file, state: group === "staged" ? "staged" : "worktree" }], next, ctx),
+         }),
+         // Same slots as a folder row — disclosure, icon — so the two line up and
+         // the status letter sits where a folder's arrow is. Without it every
+         // file name would start to the left of the folder it lives in.
+         h("span", { class: "indent", style: { width: "10px" } }),
+         h("span", { class: "status-cell", style: { color: statusColor(file.status) }, text: file.status }),
+         // The directory is the tree now. Repeating it as a grey tail answered
+         // "which folder" worse than the hierarchy does, and the narrow column
+         // clipped it anyway.
+         h("span", { class: "name", style: { color: statusColor(file.status) }, text: name }),
+         // No "partly staged" badge. A file with an index change *and* a further
+         // worktree change already says so the only way Git says it: the same
+         // path is listed here and in the other group, each row carrying its own
+         // status letter. Naming that state separately would invent a concept
+         // the user cannot see in `git status` or in any other Git client.
+         // Inside the tree the folders already answered "where is this", so only
+         // the Flat view repeats the path — and there it is essential, because
+         // nothing else identifies the file. The column is narrow, so the tail
+         // ellipsises and the tooltip keeps the whole path readable.
+         fullPath && file.path !== name
+           ? h("span", { class: "path", title: fullPath, text: fullPath })
+           : null,
+         // A submodule deserves a visible mark: its checkbox means something
+         // different from every other row's.
+         file.submodule
+           ? h("span", { class: "badge", text: t("submoduleBadge"), title: submoduleTooltip(file) })
+           : null,
+       ]);
+     }
 
 
     /** Why a submodule row behaves differently, in the user's language. */
@@ -706,68 +846,208 @@
      * "some of this folder is selected", which is a state this list cannot
      * represent, because a row's group *is* its staged state.
      */
-    function dirRow(group, dir, depth, label) {
-      const files = filesUnder(dir);
-      const total = files.length;
-      const open = !state.collapsed.has(`dir:${group}:${dir.path}`);
-      const action = group === "staged" ? t("unincludeFolder") : t("includeFolder");
-      return h("div", {
-        class: "tree-row dir-row",
-        role: "treeitem",
-        "aria-expanded": open ? "true" : "false",
-        title: dir.path,
-        onclick: () => {
-          const key = `dir:${group}:${dir.path}`;
-          if (state.collapsed.has(key)) state.collapsed.delete(key);
-          else state.collapsed.add(key);
-          paintChanges();
-        },
-      }, [
-        h("span", { class: "indent", style: { width: `${depth * 12}px` } }),
-        rowCheckbox({
-          checked: group === "staged",
-          title: action,
-          onToggle: (next) => applyInclusion(files, next),
-        }),
-        h("span", { class: "disclosure", "data-open": open ? "true" : "false" }, [icon("chevronRight", 11)]),
-        h("span", { class: "row-icon" }, [icon("folder", 13)]),
-        h("span", { class: "name", text: label }),
-        h("span", { class: "count", text: `${total}` }),
-      ]);
-    }
+     function dirKey(rk, group, dirPath) {
+       return `dir:${rk}:${group}:${dirPath}`;
+     }
+     function dirRow(group, dir, depth, label, ctx) {
+       const rk = ctx?.rk ?? ".";
+       const files = filesUnder(dir);
+       const total = files.length;
+       const key = dirKey(rk, group, dir.path);
+       const open = !state.collapsed.has(key);
+       const action = group === "staged" ? t("unincludeFolder") : t("includeFolder");
+       return h("div", {
+         class: "tree-row dir-row",
+         role: "treeitem",
+         "aria-expanded": open ? "true" : "false",
+         title: ctx && ctx.rk !== "." ? `${ctx.rk}/${dir.path}` : dir.path,
+         onclick: () => {
+           if (state.collapsed.has(key)) state.collapsed.delete(key);
+           else state.collapsed.add(key);
+           paintChanges();
+         },
+       }, [
+         h("span", { class: "indent", style: { width: `${depth * 12}px` } }),
+         rowCheckbox({
+           checked: group === "staged",
+           title: action,
+           onToggle: (next) => applyInclusion(files, next, ctx),
+         }),
+         h("span", { class: "disclosure", "data-open": open ? "true" : "false" }, [icon("chevronRight", 11)]),
+         h("span", { class: "row-icon" }, [icon("folder", 13)]),
+         h("span", { class: "name", text: label }),
+         h("span", { class: "count", text: `${total}` }),
+       ]);
+     }
 
 
-    /** Depth-first render of one change list. Returns the rows, so the caller
-        can append them in one pass. */
-    function treeRows(group, node, depth) {
-      const rows = [];
-      for (const entry of treeEntries(node)) {
-        if (entry.kind === "file") {
-          rows.push(fileRow(group, entry.file, depth));
-          continue;
-        }
-        // A compacted row stands for a chain of folders, so it is the deepest
-        // node in that chain that owns the expanded state and the children.
-        const { label, node: target } = compactDir(entry.dir, state.compactDirs);
-        rows.push(dirRow(group, target, depth, label));
-        if (state.collapsed.has(`dir:${group}:${target.path}`)) continue;
-        rows.push(...treeRows(group, target, depth + 1));
-      }
-      return rows;
+     /** Depth-first render of one change list. Returns the rows, so the caller
+         can append them in one pass. */
+     function treeRows(group, node, depth, ctx) {
+       const rows = [];
+       const rk = ctx?.rk ?? ".";
+       for (const entry of treeEntries(node)) {
+         if (entry.kind === "file") {
+           rows.push(fileRow(group, entry.file, depth, null, ctx));
+           continue;
+         }
+         // A compacted row stands for a chain of folders, so it is the deepest
+         // node in that chain that owns the expanded state and the children.
+         const { label, node: target } = compactDir(entry.dir, state.compactDirs);
+         rows.push(dirRow(group, target, depth, label, ctx));
+         if (state.collapsed.has(dirKey(rk, group, target.path))) continue;
+         rows.push(...treeRows(group, target, depth + 1, ctx));
+       }
+       return rows;
+     }
+
+     /**
+      * The same change list without its folders: IDEA's Flat view. Files are
+      * listed by full repository path, which is the whole point of leaving the
+      * tree — nothing is identified by position any more.
+      */
+    function flatRows(group, files, ctx, depth) {
+      return [...files]
+        .sort((a, b) => a.path.localeCompare(b.path, undefined, { sensitivity: "base", numeric: true }))
+        .map((file) => fileRow(group, file, depth ?? 0, ctx && ctx.rk !== "." ? `${ctx.rk}/${file.path}` : file.path, ctx));
     }
 
     /**
-     * The same change list without its folders: IDEA's Flat view. Files are
-     * listed by full repository path, which is the whole point of leaving the
-     * tree — nothing is identified by position any more.
+     * IDEA's colored square per repository. Colors are dealt from the sorted
+     * repo list with linear probing, so every visible repo gets a distinct
+     * square while a repo keeps its color as long as the repo set is unchanged
+     * (a plain hash collides too often with 5 repos on 8 colors).
      */
-    function flatRows(group, files) {
-      return [...files]
-        .sort((a, b) => a.path.localeCompare(b.path, undefined, { sensitivity: "base", numeric: true }))
-        .map((file) => fileRow(group, file, 0, file.path));
+    const REPO_COLORS = ["#e5534b", "#3fb950", "#ab7df8", "#39c5cf", "#d29922", "#f778ba", "#4a86c8", "#d1743a"];
+
+    function repoColorMap(ctxs) {
+      const sorted = [...ctxs].sort((a, b) => a.label.localeCompare(b.label, undefined, { sensitivity: "base", numeric: true }));
+      const used = new Set();
+      const map = new Map();
+      for (const ctx of sorted) {
+        let hash = 0;
+        for (const char of String(ctx.rk ?? "")) hash = (hash * 31 + char.charCodeAt(0)) | 0;
+        let index = Math.abs(hash) % REPO_COLORS.length;
+        while (used.has(index)) index = (index + 1) % REPO_COLORS.length;
+        used.add(index);
+        map.set(ctx.rk, REPO_COLORS[index]);
+      }
+      return map;
+    }
+    function filesForGroup(ctx, statusObj, group, filter) {
+      const all = (statusObj?.[group.id] ?? []).map((file) => ({
+        ...file,
+        // Being in the commit is the same question as being in the index, so
+        // the group a row came from is what its checkbox math reads.
+        state: group.id === "staged" ? "staged" : "worktree",
+      }));
+      const matches = (file) => {
+        if (!filter) return true;
+        if (file.path.toLowerCase().includes(filter)) return true;
+        // Typing the submodule name narrows to its files, like IDEA.
+        if (ctx.rk !== "." && `${ctx.rk}/${file.path}`.toLowerCase().includes(filter)) return true;
+        return false;
+      };
+      return { all, visible: all.filter(matches) };
     }
 
+    function countText(all, visible) {
+      // While filtering, say both numbers: the tree below can only ever
+      // account for the matches, and a lone count would look wrong.
+      return visible.length === all.length ? `${all.length}` : `${visible.length}/${all.length}`;
+    }
 
+    /**
+     * One batched stage/unstage across several repos (a group header's
+     * checkbox): one git call per repo, a single refresh, then the same
+     * submodule-pointer hint the single-repo path shows.
+     */
+    function applyInclusionForRepos(pairs, target) {
+      const jobs = [];
+      let rootFiles = [];
+      for (const { visible, ctx } of pairs) {
+        const want = target ? "staged" : "worktree";
+        const paths = visible.filter((file) => file.state !== want).map((file) => file.path);
+        if (!paths.length) continue;
+        if (!ctx || ctx.rk === ".") rootFiles = rootFiles.concat(visible);
+        const payload = { paths };
+        if (ctx?.root) payload.repoRoot = ctx.root;
+        jobs.push(invoke(target ? "git/stage" : "git/unstage", payload));
+      }
+      if (!jobs.length) return Promise.resolve();
+      return Promise.all(jobs).then(async (results) => {
+        const failed = results.find((result) => !result?.ok);
+        if (failed) {
+          toast(PIG.errorText(failed), "error");
+          await refresh();
+          return;
+        }
+        await refresh();
+        if (!target || !rootFiles.length) return;
+        const stuck = rootFiles.filter((file) => file.insideSubmodule);
+        if (!stuck.length) return;
+        const staged = (state.repo?.staged ?? []).map((entry) => entry.path);
+        if (stuck.some((file) => staged.includes(file.path))) toast(t("submoduleStagedHint"), "info");
+        else toast(PIG.tf("submoduleInside", { path: stuck[0].path }), "error");
+      });
+    }
+
+    /**
+     * IDEA's repository row: disclosure, cascade checkbox, color square, name,
+     * "N files", branch pill. Clicking expands; right-click switches to that
+     * repository (the top-left selector does the same).
+     */
+    function repoRow(group, ctx, all, visible, color) {
+      const rkey = `repo:${group.id}:${ctx.rk}`;
+      const open = !state.collapsed.has(rkey);
+      const branch = branchNameOf(ctx.branch);
+      return h("div", {
+        class: "tree-row repo-row",
+        role: "treeitem",
+        "aria-expanded": open ? "true" : "false",
+        title: ctx.rk === "." ? (ctx.repoObj?.repo?.root ?? ctx.label) : ctx.root,
+        onclick: () => {
+          if (state.collapsed.has(rkey)) state.collapsed.delete(rkey);
+          else state.collapsed.add(rkey);
+          paintChanges();
+        },
+        oncontextmenu: (event) => {
+          event.preventDefault();
+          repoContextMenu(event.currentTarget, ctx);
+        },
+      }, [
+        h("span", { class: "disclosure", "data-open": open ? "true" : "false" }, [icon("chevronRight", 11)]),
+        group.id === "conflicted"
+          ? h("span", { class: "indent", style: { width: "13px" } })
+          : rowCheckbox({
+            checked: group.id === "staged",
+            title: group.id === "staged" ? t("unstageAllChanges") : t("stageAllChanges"),
+            onToggle: (next) => applyInclusion(visible, next, ctx),
+          }),
+        h("span", { class: "repo-color", style: { background: color ?? "#888888" } }),
+        h("span", { class: "name", text: ctx.label }),
+        h("span", { class: "muted", text: `${countText(all, visible)} ${t("files")}` }),
+        branch ? h("span", { class: "badge", text: branch, title: branch }) : null,
+      ]);
+    }
+
+    function repoContextMenu(anchor, ctx) {
+      if (!ctx || ctx.rk === ".") return;
+      popup(anchor, [
+        {
+          label: t("switchToRepo"),
+          title: ctx.root ?? ctx.rk,
+          onSelect: () => { switchToSubmodule(ctx.root).catch(() => {}); },
+        },
+      ]);
+    }
+
+    /**
+     * IDEA's ordering: each change list groups by repository — the current one
+     * sorts among the submodules by name, like haeco-mes-parent between
+     * frontend and prototype-design. A single-repo project renders exactly as
+     * before, with no repository rows.
+     */
     function paintChanges() {
       PIG.clear(changesList);
       if (!state.repo) {
@@ -780,27 +1060,32 @@
       }
 
       const filter = state.filter.trim().toLowerCase();
-      const matches = (file) => !filter || file.path.toLowerCase().includes(filter);
+      const multi = (state.submodules ?? []).length > 0;
+      const colorMap = multi ? repoColorMap(allCtxs()) : new Map();
       let groups = 0;
 
       for (const group of GROUPS) {
-        const all = (state.repo[group.id] ?? []).map((file) => ({
-          ...file,
-          // Being in the commit is the same question as being in the index, so
-          // the group a row came from is what its checkbox math reads.
-          state: group.id === "staged" ? "staged" : "worktree",
-        }));
-        if (!all.length) continue;
-        const visible = all.filter(matches);
-        if (!visible.length) continue;
+        const buckets = [];
+        const rctx = rootCtx();
+        const rootLists = filesForGroup(rctx, state.repo, group, filter);
+        if (rootLists.visible.length) buckets.push({ ctx: rctx, ...rootLists });
+        for (const entry of state.submodules ?? []) {
+          const ctx = subCtx(entry);
+          const lists = filesForGroup(ctx, entry.status, group, filter);
+          if (lists.visible.length) buckets.push({ ctx, ...lists });
+        }
+        if (!buckets.length) continue;
         groups += 1;
 
-        const open = !state.collapsed.has(group.id);
+        const gkey = `group:${group.id}`;
+        const open = !state.collapsed.has(gkey);
+        const allTotal = buckets.reduce((total, bucket) => total + bucket.all.length, 0);
+        const visTotal = buckets.reduce((total, bucket) => total + bucket.visible.length, 0);
         const header = h("div", {
           class: "group-header",
           onclick: () => {
-            if (state.collapsed.has(group.id)) state.collapsed.delete(group.id);
-            else state.collapsed.add(group.id);
+            if (state.collapsed.has(gkey)) state.collapsed.delete(gkey);
+            else state.collapsed.add(gkey);
             paintChanges();
           },
         }, [
@@ -808,9 +1093,7 @@
           h("span", { text: t(group.label) }),
           h("span", {
             class: "count",
-            // While filtering, say both numbers: the folder tree below can only
-            // ever account for the matches, and a lone count would look wrong.
-            text: visible.length === all.length ? `${all.length}` : `${visible.length}/${all.length}`,
+            text: visTotal === allTotal ? `${allTotal}` : `${visTotal}/${allTotal}`,
           }),
         ]);
 
@@ -821,35 +1104,52 @@
           header.append(rowCheckbox({
             checked: group.id === "staged",
             title: group.id === "staged" ? t("unstageAllChanges") : t("stageAllChanges"),
-            onToggle: (next) => applyInclusion(visible, next),
+            onToggle: (next) => applyInclusionForRepos(buckets, next),
           }));
         }
         changesList.append(header);
         if (!open) continue;
-        if (!state.groupByDirectory) {
-          for (const row of flatRows(group.id, visible)) changesList.append(row);
-        } else {
-          for (const row of treeRows(group.id, buildChangeTree(visible), 0)) changesList.append(row);
+
+        if (!multi) {
+          const only = buckets[0];
+          if (!state.groupByDirectory) {
+            for (const row of flatRows(group.id, only.visible, only.ctx, 0)) changesList.append(row);
+          } else {
+            for (const row of treeRows(group.id, buildChangeTree(only.visible), 0, only.ctx)) changesList.append(row);
+          }
+          continue;
+        }
+
+        buckets.sort((a, b) => a.ctx.label.localeCompare(b.ctx.label, undefined, { sensitivity: "base", numeric: true }));
+        for (const bucket of buckets) {
+          changesList.append(repoRow(group, bucket.ctx, bucket.all, bucket.visible, colorMap.get(bucket.ctx.rk)));
+          if (state.collapsed.has(`repo:${group.id}:${bucket.ctx.rk}`)) continue;
+          if (!state.groupByDirectory) {
+            for (const row of flatRows(group.id, bucket.visible, bucket.ctx, 1)) changesList.append(row);
+          } else {
+            for (const row of treeRows(group.id, buildChangeTree(bucket.visible), 1, bucket.ctx)) changesList.append(row);
+          }
         }
       }
 
       if (!groups) {
+        const noFilter = !state.filter.trim();
         changesList.append(h("div", { class: "empty-state" }, [
-          h("div", { class: "headline", text: filter ? t("noMatchingChanges") : t("noChanges") }),
+          h("div", { class: "headline", text: noFilter ? t("noChanges") : t("noMatchingChanges") }),
         ]));
       }
     }
 
-    function paintDiffHeader() {
-      PIG.clear(diffHeader);
-      if (!state.selection || !state.diff) {
-        diffHeader.append(h("span", { class: "muted", text: t("pickFile") }));
-        return;
-      }
-      const [, path] = state.selection.split(":");
-      const { name, directory } = splitPath(path);
-      diffHeader.append(h("span", { text: name }));
-      if (directory) diffHeader.append(h("span", { class: "muted", text: directory }));
+     function paintDiffHeader() {
+       PIG.clear(diffHeader);
+       if (!state.selection || !state.diff) {
+         diffHeader.append(h("span", { class: "muted", text: t("pickFile") }));
+         return;
+       }
+       const sel = state.selection;
+       const { name, directory } = splitPath(sel.p);
+       if (sel.rk && sel.rk !== ".") diffHeader.append(h("span", { class: "muted", text: sel.rk }));
+       diffHeader.append(h("span", { text: name }));
       diffHeader.append(h("div", { class: "toolbar-spacer" }));
       diffHeader.append(iconButton("columns", t("sideBySide") + " / " + t("unified"), () => {
         state.diffUnified = !state.diffUnified;
@@ -871,19 +1171,17 @@
       }, { size: 13 }));
     }
 
-    function hunkActionsFor(selection, file) {
-      const group = selection.split(":")[0];
-      const isIndex = group === "staged";
-      if (group === "untracked") return [];
-      if (state.ignoreWhitespace) return [];
+     function hunkActionsFor(selection) {
+       const group = selection?.g ?? "";
+       const isIndex = group === "staged";
       if (isIndex) {
         return [{
           label: t("unstageHunk"),
           title: t("unstageHunk"),
           onSelect: async (hunk) => {
-            const patch = PIG.diff.patchFor({ header: currentHeader(), hunks: [hunk] }, [hunk]);
-            report(
-              await invoke("git/apply-patch", { action: "unstage", patch, root: state.diff?.root }),
+             const patch = PIG.diff.patchFor({ header: currentHeader(), hunks: [hunk] }, [hunk]);
+             report(
+               await invoke("git/apply-patch", { action: "unstage", patch, root: state.diff?.root, repoRoot: state.diff?.root }),
               t("unstageHunk"),
             );
             await refresh();
@@ -895,9 +1193,9 @@
           label: t("stageHunk"),
           title: t("stageHunk"),
           onSelect: async (hunk) => {
-            const patch = PIG.diff.patchFor({ header: currentHeader(), hunks: [hunk] }, [hunk]);
-            report(
-              await invoke("git/apply-patch", { action: "stage", patch, root: state.diff?.root }),
+             const patch = PIG.diff.patchFor({ header: currentHeader(), hunks: [hunk] }, [hunk]);
+             report(
+               await invoke("git/apply-patch", { action: "stage", patch, root: state.diff?.root, repoRoot: state.diff?.root }),
               t("stageHunk"),
             );
             await refresh();
@@ -914,9 +1212,9 @@
               confirmLabel: t("discard"),
             });
             if (!confirmed) return;
-            const patch = PIG.diff.patchFor({ header: currentHeader(), hunks: [hunk] }, [hunk]);
-            report(
-              await invoke("git/apply-patch", { action: "discard", patch, root: state.diff?.root }),
+             const patch = PIG.diff.patchFor({ header: currentHeader(), hunks: [hunk] }, [hunk]);
+             report(
+               await invoke("git/apply-patch", { action: "discard", patch, root: state.diff?.root, repoRoot: state.diff?.root }),
               t("discardHunk"),
             );
             await refresh();
@@ -929,36 +1227,37 @@
       return state.diff?.parsed?.files?.[0]?.header ?? ["diff --git a/x b/x"];
     }
 
-    function paintDiff() {
-      paintDiffHeader();
-      const group = state.selection ? state.selection.split(":")[0] : null;
-      const stageable = group !== "untracked" && !state.ignoreWhitespace;
-      const result = PIG.diff.render(diffHost, {
-        text: state.diff?.text ?? "",
-        unified: state.diffUnified,
-        showWhitespaces: state.showWhitespaces,
-        showLineNumbers: state.showLineNumbers,
-        stageable,
-        hunkActions: state.selection ? hunkActionsFor(state.selection) : [],
-        hunkCheckbox: state.selection && group !== "untracked" && !state.ignoreWhitespace
-          ? (hunk) => ({
-            checked: group === "staged",
-            onChange: async (checked) => {
-              const isIndex = group === "staged";
-              if (checked === isIndex) return;
-              const patch = PIG.diff.patchFor({ header: currentHeader(), hunks: [hunk] }, [hunk]);
-              report(
-                await invoke("git/apply-patch", {
-                  action: checked ? "stage" : "unstage",
-                  patch,
-                  root: state.diff?.root,
-                }),
-                t("includeIntoCommit"),
-              );
-              await refresh();
-            },
-          })
-          : null,
+     function paintDiff() {
+       paintDiffHeader();
+       const group = state.selection ? state.selection.g : null;
+       const stageable = group !== "untracked" && !state.ignoreWhitespace;
+       const result = PIG.diff.render(diffHost, {
+         text: state.diff?.text ?? "",
+         unified: state.diffUnified,
+         showWhitespaces: state.showWhitespaces,
+         showLineNumbers: state.showLineNumbers,
+         stageable,
+         hunkActions: state.selection ? hunkActionsFor(state.selection) : [],
+         hunkCheckbox: state.selection && group !== "untracked" && !state.ignoreWhitespace
+           ? (hunk) => ({
+             checked: group === "staged",
+             onChange: async (checked) => {
+               const isIndex = group === "staged";
+               if (checked === isIndex) return;
+               const patch = PIG.diff.patchFor({ header: currentHeader(), hunks: [hunk] }, [hunk]);
+               report(
+                 await invoke("git/apply-patch", {
+                   action: checked ? "stage" : "unstage",
+                   patch,
+                   root: state.diff?.root,
+                   repoRoot: state.diff?.root,
+                 }),
+                 t("includeIntoCommit"),
+               );
+               await refresh();
+             },
+           })
+           : null,
         emptyMessage: state.diff?.binary ? t("binaryDiff") : t("noDiff"),
       });
       // `state.diff` is null while nothing is selected, so the parsed model is
@@ -972,38 +1271,39 @@
      * pick can only be left by finishing it or by aborting, and the plugin's own
      * Pull can produce one, so the escape has to be here and not in a terminal.
      */
-    function paintCommit() {
-      commitButton.disabled = state.busy || (!state.message.trim() && !state.amend);
-      const staged = state.repo?.staged?.length ?? 0;
-      const total = staged
-        + (state.repo?.unstaged?.length ?? 0)
-        + (state.repo?.untracked?.length ?? 0)
-        + (state.repo?.conflicted?.length ?? 0);
-      const conflicts = state.repo?.conflicted?.length ?? 0;
-      const operation = state.repo?.operation ?? null;
-      PIG.clear(summary);
-      if (operation) {
-        summary.className = "commit-summary warn";
-        summary.append(h("span", { text: t(`${OPERATION_KEYS[operation] ?? "conflictNotice"}`) }));
-        // A merge is finished by committing, so it has no "continue"; the
-        // sequencer operations do.
-        if (operation !== "merge") {
-          summary.append(operationButton(t("continueOperation"), operation, "continue"));
-        }
-        summary.append(operationButton(t("abortOperation"), operation, "abort"));
-      } else if (conflicts) {
-        summary.className = "commit-summary warn";
-        summary.append(t("conflictNotice"));
-      } else if (!staged && !state.amend) {
-        summary.className = "commit-summary warn";
-        summary.append(t("nothingStaged"));
-      } else {
-        summary.className = "commit-summary";
-        summary.append(PIG.state.locale === "zh-CN"
-          ? `将提交 ${staged} / ${total} 个文件`
-          : `${staged} of ${total} file${total === 1 ? "" : "s"} will be committed`);
-      }
-    }
+     function paintCommit() {
+       commitButton.disabled = state.busy || (!state.message.trim() && !state.amend);
+       const totals = totalCounts();
+       const staged = totals.staged;
+       const total = totals.staged + totals.unstaged + totals.untracked + totals.conflicted;
+       const conflicts = totals.conflicted;
+       const operation = state.repo?.operation ?? null;
+       PIG.clear(summary);
+       if (operation) {
+         summary.className = "commit-summary warn";
+         summary.append(h("span", { text: t(`${OPERATION_KEYS[operation] ?? "conflictNotice"}`) }));
+         // A merge is finished by committing, so it has no "continue"; the
+         // sequencer operations do.
+         if (operation !== "merge") {
+           summary.append(operationButton(t("continueOperation"), operation, "continue"));
+         }
+         summary.append(operationButton(t("abortOperation"), operation, "abort"));
+       } else if (conflicts) {
+         summary.className = "commit-summary warn";
+         summary.append(t("conflictNotice"));
+       } else if (!staged && !state.amend) {
+         summary.className = "commit-summary warn";
+         summary.append(t("nothingStaged"));
+       } else {
+         summary.className = "commit-summary";
+         // Whole sentence per locale via tf; `s` feeds the English plural only.
+         summary.append(PIG.tf("commitSummary", { staged, total, s: total === 1 ? "" : "s" }));
+         const targets = stagedTargets();
+         if (targets.length > 1) {
+           summary.append(h("span", { class: "muted", text: ` · ${PIG.tf("commitMultipleRepos", { count: targets.length })}` }));
+         }
+       }
+     }
 
     function operationButton(label, operation, action) {
       return h("button", {
@@ -1031,9 +1331,7 @@
       PIG.clear(generateButton);
       generateButton.append(icon("sparkles", 13));
       generateButton.append(h("span", { class: "gen-label", text: busy ? t("generating") : t("generateMessage") }));
-      generateButton.title = `${t("generateMessage")} · ${languageLabel()}${PIG.state.locale === "zh-CN"
-        ? "（未选中文件时使用全部已暂存内容）"
-        : " (uses everything staged when no file is selected)"}`;
+      generateButton.title = PIG.tf("generateScope", { action: t("generateMessage"), lang: languageLabel() });
     }
 
     /**
@@ -1041,13 +1339,13 @@
      * everything staged when the list has no selection. Reported back to them
      * afterwards so the scope is never a guess.
      */
-    function draftTarget() {
-      if (state.selection) {
-        const [group, ...rest] = state.selection.split(":");
-        return { path: rest.join(":"), mode: group === "staged" ? "index" : "worktree", group };
-      }
-      return null;
-    }
+     function draftTarget() {
+       if (state.selection) {
+         const sel = state.selection;
+         return { path: sel.p, mode: sel.g === "staged" ? "index" : "worktree", group: sel.g, repoRoot: sel.root ?? null };
+       }
+       return null;
+     }
 
     /**
      * Say what actually went wrong. A permission that was never granted is not
@@ -1067,8 +1365,8 @@
     // Note: 界面语言只有视图知道（插件进程拿不到），所以 locale 随每次请求传；语言是 chevron 菜单里的显式选择而不是推断，auto 的历史回退靠引擎返回 null 而不是 "en" — 见 .agents/notes/implemented/architecture/2026-09-11-commit-message-prompt.md
     async function generate() {
       if (state.generating) return;
-      const target = draftTarget();
-      const payload = target ? { path: target.path, mode: target.mode } : {};
+       const target = draftTarget();
+       const payload = target ? { path: target.path, mode: target.mode, ...(target.repoRoot ? { repoRoot: target.repoRoot } : {}) } : {};
       if (state.commitModelKey) payload.modelKey = state.commitModelKey;
       // The plugin process has no idea which language this window speaks, so it
       // travels with the request: `commitLang` is the user's standing choice,
@@ -1187,120 +1485,146 @@
     }
 
     // ----------------------------------------------------------- actions --
-    function select(selectionKey) {
-      state.selection = selectionKey;
-      loadDiff().catch((error) => toast(String(error?.message ?? error), "error"));
-      paintChanges();
-    }
+     // ----------------------------------------------------------- actions --
+     // `selection` is `{ rk, g, p, root }`: the repo key ("." for the current
+     // repo, else the submodule rel), the group, the repo-relative path, and
+     // the absolute repo root file actions run in.
+     function select(sel) {
+       state.selection = sel ? { rk: sel.rk ?? ".", g: sel.g, p: sel.p, root: sel.root ?? null } : null;
+       loadDiff().catch((error) => toast(String(error?.message ?? error), "error"));
+       paintChanges();
+     }
 
-    function canStageSelected() {
-      return Boolean(state.selection && state.selection.split(":")[0] !== "staged");
-    }
+     function canStageSelected() {
+       return Boolean(state.selection && state.selection.g !== "staged");
+     }
 
-    function canUnstageSelected() {
-      return Boolean(state.selection && state.selection.split(":")[0] === "staged");
-    }
+     function canUnstageSelected() {
+       return Boolean(state.selection && state.selection.g === "staged");
+     }
 
-    function selectedPath() {
-      return state.selection ? state.selection.split(":").slice(1).join(":") : null;
-    }
+     function selectedPath() {
+       return state.selection ? state.selection.p : null;
+     }
 
-    async function stageSelected(staging) {
-      const path = selectedPath();
-      if (!path) return;
-      report(await invoke(staging ? "git/stage" : "git/unstage", { paths: [path] }), staging ? t("stageFile") : t("unstageFile"));
-      await refresh();
-    }
+     function selectionPayload(extra) {
+       return { ...(extra ?? {}), ...(state.selection?.root ? { repoRoot: state.selection.root } : {}) };
+     }
 
-    async function rollbackSelected() {
-      const path = selectedPath();
-      if (!path) return;
-      const confirmed = await dialog({
-        title: t("rollback"),
-        message: `${t("rollback")} ${path}?`,
-        detail: t("discard"),
-        danger: true,
-        confirmLabel: t("rollback"),
-      });
-      if (!confirmed) return;
-      report(await invoke("git/discard", { paths: [path] }), t("rollback"));
-      await refresh();
-    }
+     async function stageSelected(staging) {
+       const path = selectedPath();
+       if (!path) return;
+       report(await invoke(staging ? "git/stage" : "git/unstage", selectionPayload({ paths: [path] })), staging ? t("stageFile") : t("unstageFile"));
+       await refresh();
+     }
 
-    function fileContextMenu(anchor, group, file) {
-      const items = [
-        { label: t("showDiff"), onSelect: () => select(`${group}:${file.path}`) },
-        { type: "separator" },
-      ];
-      if (group === "staged") {
-        items.push({ label: t("unstageFile"), onSelect: () => stageFile(group, file, false) });
-      } else {
-        items.push({ label: t("stageFile"), onSelect: () => stageFile(group, file, true) });
-      }
-      items.push({
-        label: t("rollback"),
-        disabled: group === "staged",
-        onSelect: async () => {
-          const confirmed = await dialog({
-            title: t("rollback"),
-            message: `${t("rollback")} ${file.path}?`,
-            danger: true,
-            confirmLabel: t("rollback"),
-          });
-          if (!confirmed) return;
-          report(await invoke("git/discard", { paths: [file.path] }), t("rollback"));
-          await refresh();
-        },
-      });
-      const relative = workspaceRelative(file.path, state.repo);
-      items.push({ type: "separator" });
-      items.push({
-        label: t("openFile"),
-        disabled: !relative,
-        title: relative ? file.path : `${t("openFile")} — ${file.path}`,
-        onSelect: () => invoke("fs.openDefault", { path: relative }),
-      });
-      items.push({
-        label: t("revealInFileManager"),
-        disabled: !relative,
-        onSelect: () => invoke("fs.reveal", { path: relative }),
-      });
-      items.push({ label: t("copy") + " " + t("hash"), onSelect: () => PIG.copyText(file.path) });
-      popup(anchor, items);
-    }
+     async function rollbackSelected() {
+       const path = selectedPath();
+       if (!path) return;
+       const confirmed = await dialog({
+         title: t("rollback"),
+         message: `${t("rollback")} ${path}?`,
+         detail: t("discard"),
+         danger: true,
+         confirmLabel: t("rollback"),
+       });
+       if (!confirmed) return;
+       report(await invoke("git/discard", selectionPayload({ paths: [path] })), t("rollback"));
+       await refresh();
+     }
 
-    async function stageFile(group, file, staging) {
-      report(await invoke(staging ? "git/stage" : "git/unstage", { paths: [file.path] }), staging ? t("stageFile") : t("unstageFile"));
-      await refresh();
-    }
+     function ctxRepoForMenu(ctx) {
+       if (ctx?.repoObj) return ctx.repoObj;
+       return state.repo;
+     }
 
-    async function loadDiff() {
-      if (!state.selection) {
-        state.diff = null;
-        paintDiff();
-        return;
-      }
-      const [group, ...rest] = state.selection.split(":");
-      const path = rest.join(":");
-      const mode = group === "staged" ? "index" : "worktree";
-      const result = await invoke("git/diff", {
-        path,
-        mode,
-        ignoreWhitespace: state.ignoreWhitespace,
-      });
-      if (!result.ok) {
-        state.diff = { text: "", error: result.message };
-        paintDiff();
-        diffHost.append(h("div", { class: "banner error" }, [
-          h("div", { class: "banner-text" }, [
-            h("div", { text: result.message ?? "Diff failed" }),
-          ]),
-        ]));
-        return;
-      }
-      state.diff = result;
-      paintDiff();
-    }
+     function fileContextMenu(anchor, group, file, ctx) {
+       const rk = ctx?.rk ?? ".";
+       const root = ctx?.root ?? null;
+       const at = (extra) => ({ ...(extra ?? {}), ...(root ? { repoRoot: root } : {}) });
+       const items = [
+         { label: t("showDiff"), onSelect: () => select({ rk, g: group, p: file.path, root }) },
+         { type: "separator" },
+       ];
+       if (group === "staged") {
+         items.push({ label: t("unstageFile"), onSelect: () => stageFile(group, file, false, ctx) });
+       } else {
+         items.push({ label: t("stageFile"), onSelect: () => stageFile(group, file, true, ctx) });
+       }
+       items.push({
+         label: t("rollback"),
+         disabled: group === "staged",
+         onSelect: async () => {
+           const confirmed = await dialog({
+             title: t("rollback"),
+             message: `${t("rollback")} ${file.path}?`,
+             danger: true,
+             confirmLabel: t("rollback"),
+           });
+           if (!confirmed) return;
+           report(await invoke("git/discard", at({ paths: [file.path] })), t("rollback"));
+           await refresh();
+         },
+       });
+       const relative = workspaceRelative(file.path, ctxRepoForMenu(ctx));
+       items.push({ type: "separator" });
+       items.push({
+         label: t("openFile"),
+         disabled: !relative,
+         title: relative ? file.path : `${t("openFile")} — ${file.path}`,
+         onSelect: () => invoke("fs.openDefault", { path: relative }),
+       });
+       items.push({
+         label: t("revealInFileManager"),
+         disabled: !relative,
+         onSelect: () => invoke("fs.reveal", { path: relative }),
+       });
+       // The file itself has no hash to copy; offer HEAD like the Log view does
+       // (git-view copyRevisionNumber), and fall back to the path with an honest
+       // label when there is no commit yet. No `t("copy") + t("hash")` splicing.
+       {
+         const headHash = (ctx?.status?.branch?.oid ?? state.repo?.branch?.oid) ?? null;
+         if (headHash) items.push({ label: t("copyRevisionNumber"), onSelect: () => PIG.copyText(headHash) });
+         else items.push({ label: t("copyPath"), onSelect: () => PIG.copyText(file.path) });
+       }
+       popup(anchor, items);
+     }
+
+     async function stageFile(group, file, staging, ctx) {
+       const payload = { paths: [file.path] };
+       const root = ctx?.root ?? state.selection?.root ?? null;
+       if (root) payload.repoRoot = root;
+       report(await invoke(staging ? "git/stage" : "git/unstage", payload), staging ? t("stageFile") : t("unstageFile"));
+       await refresh();
+     }
+
+     async function loadDiff() {
+       if (!state.selection) {
+         state.diff = null;
+         paintDiff();
+         return;
+       }
+       const sel = state.selection;
+       const mode = sel.g === "staged" ? "index" : "worktree";
+       const result = await invoke("git/diff", {
+         path: sel.p,
+         mode,
+         ignoreWhitespace: state.ignoreWhitespace,
+         ...(sel.root ? { repoRoot: sel.root } : {}),
+       });
+       if (!result.ok) {
+         state.diff = { text: "", error: result.message };
+         paintDiff();
+         diffHost.append(h("div", { class: "banner error" }, [
+           h("div", { class: "banner-text" }, [
+             h("div", { text: result.message ?? t("diff") }),
+           ]),
+         ]));
+         return;
+       }
+       state.diff = result;
+       paintDiff();
+     }
 
     function setIgnoreWhitespace(enabled) {
       state.ignoreWhitespace = enabled;
@@ -1334,48 +1658,77 @@
       ]);
     }
 
-    async function commit(withPush) {
-      if (state.busy) return;
-      const message = state.message.trim();
-      if (!message && !state.amend) {
-        toast(t("commitMessage"), "error");
-        messageInput.focus();
-        return;
-      }
-      if (!state.amend && !(state.repo?.staged?.length ?? 0)) {
-        toast(t("nothingStaged"), "error");
-        return;
-      }
-      state.busy = true;
-      paintCommit();
-      const result = await invoke("git/commit", {
-        message,
-        amend: state.amend,
-        signoff: state.signoff,
-      });
-      state.busy = false;
-      if (!result.ok) {
-        toast(PIG.errorText(result), "error");
-        paintCommit();
-        return;
-      }
-      if (message) {
-        const remembered = await invoke("git/message-used", { message });
-        state.messages = remembered.prefs?.messages ?? state.messages;
-      }
-      state.message = "";
-      messageInput.value = "";
-      state.amend = false;
-      amendBox.checked = false;
-      toast(firstLine(result.stdout) || t("commit"), "info");
+     async function commit(withPush) {
+       if (state.busy) return;
+       const message = state.message.trim();
+       if (!message && !state.amend) {
+         toast(t("commitMessage"), "error");
+         messageInput.focus();
+         return;
+       }
+       // IDEA commits every repository with the same message: submodules first
+       // (their new HEADs become the parent's gitlink updates), the current
+       // repo last. A parent-only `git commit` can never include the 15 files
+       // changed inside `backend` — it only records which commit `backend`
+       // points at.
+       const targets = stagedTargets();
+       if (!state.amend && !targets.length) {
+         toast(t("nothingStaged"), "error");
+         return;
+       }
+       if (!targets.length) targets.push(rootCtx());
+       state.busy = true;
+       paintCommit();
+       let failed = null;
+       let lastResult = null;
+       for (const target of targets) {
+         const payload = { message, amend: state.amend, signoff: state.signoff };
+         if (target.root) payload.repoRoot = target.root;
+         const result = await invoke("git/commit", payload);
+         if (!result.ok) {
+           failed = { target, result };
+           break;
+         }
+         lastResult = { target, result };
+       }
+       state.busy = false;
+       if (failed) {
+         toast(`${failed.target.rk === "." ? "" : `${failed.target.rk}: `}${PIG.errorText(failed.result)}`, "error");
+         paintCommit();
+         await refresh();
+         return;
+       }
+       if (message) {
+         const remembered = await invoke("git/message-used", { message });
+         state.messages = remembered.prefs?.messages ?? state.messages;
+       }
+       state.message = "";
+       messageInput.value = "";
+       state.amend = false;
+       amendBox.checked = false;
+       if (targets.length > 1) toast(PIG.tf("commitMultipleRepos", { count: targets.length }), "info");
+       else toast(firstLine(lastResult?.result?.stdout) || t("commit"), "info");
 
       if (withPush) {
-        const pushed = await invoke("git/push", { setUpstream: !state.repo?.branch?.upstream });
-        report(pushed, t("push"));
-        await PIG.refreshTrackingRefs(pushed);
+        // Note: 聚合提交的 Push 把刚才提交的 N 个仓逐个推出去（子模块先、父仓后），单仓失败点名且不挡后续 — 见 .agents/notes/implemented/architecture/2026-09-12-multi-repo-push.md
+        const pushTargets = targets.map((target) => ({
+          rk: target.rk,
+          root: target.root,
+          setUpstream: !target.branch?.upstream,
+        }));
+        const outcomes = await PIG.pushRepos(pushTargets);
+        const okCount = outcomes.filter((o) => o?.ok).length;
+        for (const outcome of outcomes) {
+          if (!outcome?.ok) {
+            toast(`${outcome.rel && outcome.rel !== "." ? `${outcome.rel}: ` : ""}${PIG.errorText(outcome)}`, "error");
+          }
+        }
+        if (okCount === outcomes.length && outcomes.length > 1) toast(PIG.tf("pushedRepos", { count: okCount }), "info");
+        else if (okCount !== outcomes.length && outcomes.length > 1) toast(PIG.tf("pushPartial", { ok: okCount, total: outcomes.length }), outcomes.length && okCount ? "info" : "error");
+        else if (outcomes.length === 1) report(outcomes[0], t("push"));
       }
-      await refresh();
-    }
+       await refresh();
+     }
 
     function openMessageHistory(event) {
       if (!state.messages.length) {
@@ -1474,51 +1827,93 @@
      */
     let loadedRepo;
 
-    /** Drop everything that describes one repository, and only that one. */
-    function forgoRepositoryState() {
-      state.selection = null;
-      state.diff = null;
-      state.filter = "";
-    }
-
-    async function refresh() {
-      const result = await invoke("git/repo");
-      if (!result.ok) {
-        state.repo = null;
-        state.error = result.message ?? t("notARepository");
-        // Nothing is loaded, so nothing repository-relative may stay on screen
-        // — and the next repository to load must not be mistaken for the same
-        // one continuing.
-        forgoRepositoryState();
-        loadedRepo = undefined;
-        paintAll();
-        return state.repo ?? {};
-      }
-      const repoRoot = result.repo?.root ?? null;
-      if (loadedRepo !== undefined && repoRoot !== loadedRepo) forgoRepositoryState();
-      loadedRepo = repoRoot;
-      state.repo = result;
-      state.error = null;
-      // Drop a selection whose file left the change lists.
-      if (state.selection) {
-        const [group, ...rest] = state.selection.split(":");
-        const path = rest.join(":");
-        const stillThere = (result[group] ?? []).some((file) => file.path === path);
-        if (!stillThere) state.selection = null;
-      }
-      if (!state.selection) {
-        const first = ["conflicted", "unstaged", "staged", "untracked"]
-          .flatMap((group) => (result[group] ?? []).map((file) => `${group}:${file.path}`))[0];
-        state.selection = first ?? null;
-      }
-      paintAll();
-      await loadDiff();
-      return result;
-    }
-
-    async function loadPrefs() {
-      const result = await invoke("git/prefs");
-      if (!result.ok) return;
+     /** Drop everything that describes one repository, and only that one. */
+     function forgoRepositoryState() {
+       state.selection = null;
+       state.diff = null;
+       state.filter = "";
+       state.submodules = [];
+       state.subLoading = false;
+       // A commit draft belongs to the repository it was typed against: carrying
+       // the message/amend/signoff across would commit one repo's text in another.
+       state.message = "";
+       state.amend = false;
+       state.signoff = false;
+       messageInput.value = "";
+       amendBox.checked = false;
+       signoffBox.checked = false;
+     }
+     async function refresh() {
+       const result = await invoke("git/repo");
+       if (!result.ok) {
+         state.repo = null;
+         state.error = result.message ?? t("notARepository");
+         // Nothing is loaded, so nothing repository-relative may stay on screen
+         // — and the next repository to load must not be mistaken for the same
+         // one continuing.
+         forgoRepositoryState();
+         loadedRepo = undefined;
+         paintAll();
+         return state.repo ?? {};
+       }
+       const repoRoot = result.repo?.root ?? null;
+       if (loadedRepo !== undefined && repoRoot !== loadedRepo) forgoRepositoryState();
+       loadedRepo = repoRoot;
+       state.repo = result;
+       state.error = null;
+       // Drop a selection whose file left the change lists (root or submodule).
+       if (state.selection) {
+         const sel = state.selection;
+         const list = sel.rk === "." || !sel.rk
+           ? (result[sel.g] ?? [])
+           : ((state.submodules ?? []).find((entry) => entry.rel === sel.rk)?.status?.[sel.g] ?? []);
+         if (!list.some((file) => file.path === sel.p)) state.selection = null;
+       }
+       // IDEA-like aggregation: the parent only prints one gitlink line per
+       // submodule, so fetch dirty submodules' own statuses for the inline
+       // sections. Paint first (fast), then fill the sections in.
+       paintAll();
+      const hasSubmodule = result.siblingMode === true
+        || [...(result.staged ?? []), ...(result.unstaged ?? [])].some((file) => file?.submodule)
+        // An embedded (non-submodule) repo shows as one untracked dir entry;
+        // Git never descends into it, so its inner changes need the same fetch.
+        || (result.untracked ?? []).some((file) => String(file?.path ?? "").endsWith("/"));
+      if (hasSubmodule) {
+        state.subLoading = true;
+         paintChangesHeader();
+         try {
+           const subs = await invoke("git/submodule-statuses");
+           state.submodules = subs?.ok ? (subs.submodules ?? []) : [];
+         } catch {
+           state.submodules = [];
+         }
+         state.subLoading = false;
+       } else {
+         state.submodules = [];
+         state.subLoading = false;
+       }
+       if (!state.selection) {
+         const firstRoot = ["conflicted", "unstaged", "staged", "untracked"]
+           .flatMap((group) => (result[group] ?? []).map((file) => ({ rk: ".", g: group, p: file.path, root: result.repo?.root ?? null })))[0];
+         state.selection = firstRoot ?? null;
+         if (!state.selection) {
+           for (const entry of state.submodules ?? []) {
+             const hit = ["conflicted", "unstaged", "staged", "untracked"]
+               .flatMap((group) => (entry.status?.[group] ?? []).map((file) => ({ rk: entry.rel, g: group, p: file.path, root: entry.root })))[0];
+             if (hit) {
+               state.selection = hit;
+               break;
+             }
+           }
+         }
+       }
+       paintAll();
+       await loadDiff();
+       return result;
+     }
+     async function loadPrefs() {
+       const result = await invoke("git/prefs");
+       if (!result.ok) return;
       state.messages = result.prefs?.messages ?? [];
       const ui = result.prefs?.ui ?? {};
       if (typeof ui.commitUnified === "boolean") state.diffUnified = ui.commitUnified;
@@ -1537,7 +1932,9 @@
      * tree, and a refresh happens after every stage, commit and branch action.
      */
     async function loadRepositories() {
-      repoWidget.update(await invoke("git/repos"));
+      const result = await invoke("git/repos");
+      state.allRepos = result?.ok ? (result.repos ?? []) : [];
+      repoWidget.update(result);
     }
 
     (async () => {

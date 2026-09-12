@@ -32,6 +32,7 @@
   --fg-secondary: #5a5d63;
   --fg-muted: #8c8c8c;
   --selection: #d4e2ff;
+  --selection-fg: #1f2328;
   --selection-inactive: #e8eaed;
   --hover: #edf1f7;
   --focus-ring: #2e5c99;
@@ -94,6 +95,7 @@
   --fg-secondary: #a9b1ba;
   --fg-muted: #808080;
   --selection: #2f65ca;
+  --selection-fg: #ffffff;
   --selection-inactive: #46484a;
   --hover: #4a4d4f;
   --focus-ring: #7aa2f7;
@@ -512,15 +514,16 @@ textarea {
   background: var(--hover);
 }
 
+/* Selected text uses --selection-fg so light (#d4e2ff bg) stays dark and readable. */
 .tree-row[aria-selected="true"] {
   background: var(--selection);
-  color: #ffffff;
+  color: var(--selection-fg);
 }
 
 .tree-row[aria-selected="true"] .meta,
 .tree-row[aria-selected="true"] .path,
 .tree-row[aria-selected="true"] .badge {
-  color: color-mix(in oklab, #ffffff 82%, transparent);
+  color: color-mix(in oklab, var(--selection-fg) 82%, transparent);
 }
 
 .tree-row .indent {
@@ -627,6 +630,21 @@ textarea {
   color: var(--fg-muted);
   font-size: 11px;
   font-weight: 400;
+}
+/* IDEA-style repository row: like a folder row, plus the per-repo color
+   square and a branch pill. Files nested below it render one level deeper. */
+.tree-row.repo-row {
+  font-weight: 600;
+  cursor: pointer;
+}
+.tree-row.repo-row .name {
+  color: var(--fg);
+}
+.tree-row.repo-row .repo-color {
+  flex: 0 0 auto;
+  width: 10px;
+  height: 10px;
+  border-radius: 3px;
 }
 
 .tree-row.dir-row .meta {
@@ -1005,15 +1023,16 @@ textarea {
   background: var(--hover);
 }
 
+/* Same --selection-fg contract as .tree-row above: white on light blue is unreadable. */
 .log-row[aria-selected="true"] {
   background: var(--selection);
-  color: #ffffff;
+  color: var(--selection-fg);
 }
 
 .log-row[aria-selected="true"] .log-author,
 .log-row[aria-selected="true"] .log-hash,
 .log-row[aria-selected="true"] .log-date {
-  color: color-mix(in oklab, #ffffff 78%, transparent);
+  color: color-mix(in oklab, var(--selection-fg) 78%, transparent);
 }
 
 .log-row.mine .log-subject {

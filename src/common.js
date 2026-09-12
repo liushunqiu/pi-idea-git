@@ -202,6 +202,34 @@
       forcePushBody: "This rewrites {{branch}} on {{remote}}: commits that are there and not here are dropped. The lease means it only runs while the remote is still where this window last saw it, so a push from someone else is refused instead of erased.",
       gitOutput: "Git output",
       showDetail: "Show details",
+       commitSummary: "{{staged}} of {{total}} file{{s}} will be committed",
+       generateScope: "{{action}} · {{lang}} (uses everything staged when no file is selected)",
+       collapsedLines: "⋮ {{count}} unchanged line{{s}}",
+       copyPath: "Copy Path",
+       switchToRepo: "Switch to this repository",
+       submoduleGroup: "{{rel}} ({{kind}} · {{branch}})",
+       commitMultipleRepos: "Commit {{count}} repositories with the same message",
+       submoduleCommitted: "{{rel}} committed",
+       siblingRepoBadge: "sibling repository",
+       siblingRepoHint: "A repository that sits next to the current one in the same folder, not inside it.",
+       pushDialogTitle: "Push",
+       pushDialogSubtitle: "Push each repository's commits to its own remote.",
+       pushAll: "Push All",
+       pushSelected: "Push Selected",
+       pushing: "Pushing…",
+       pushed: "Pushed",
+       pushedRepos: "Pushed {{count}} repositories",
+       pushPartial: "Pushed {{ok}} of {{total}} repositories",
+       pushNoUpstream: "no upstream",
+       pushNoRemote: "no remote to push to",
+       pushUpToDate: "up to date",
+       pushNothingToPush: "Nothing to push: every repository is up to date.",
+       pushDialogHint: "Only the checked repositories are pushed. A failure in one does not stop the others.",
+       pushRowPushed: "{{branch}} → {{remote}}/{{branch}}",
+       relativeJustNow: "just now",
+      relativeMinutesAgo: "{{count}} minute{{s}} ago",
+      relativeHoursAgo: "{{count}} hour{{s}} ago",
+      relativeDaysAgo: "{{count}} day{{s}} ago",
     },
     "zh-CN": {
       commit: "提交",
@@ -387,6 +415,34 @@
       forcePushBody: "这会把 {{remote}} 上的 {{branch}} 重写为本地提交：只存在于远端的提交将被丢弃。lease 的含义是只有远端仍停在本窗口上次看到的位置时才执行，因此他人的推送会被拒绝，而不是被覆盖。",
       gitOutput: "Git 输出",
       showDetail: "查看详情",
+       commitSummary: "将提交 {{staged}} / {{total}} 个文件",
+       generateScope: "{{action}} · {{lang}}（未选中文件时使用全部已暂存内容）",
+       collapsedLines: "⋮ {{count}} 行未修改",
+       copyPath: "复制路径",
+      switchToRepo: "切换到该仓库",
+      submoduleGroup: "{{rel}}（{{kind}} · {{branch}}）",
+      commitMultipleRepos: "将用同一提交信息提交 {{count}} 个仓库",
+      submoduleCommitted: "{{rel}} 已提交",
+      siblingRepoBadge: "平级仓库",
+      siblingRepoHint: "与当前仓库在同一文件夹下的仓库，不是它的子目录。",
+      pushDialogTitle: "推送",
+      pushDialogSubtitle: "把每个仓库的提交推送到它自己的远端。",
+      pushAll: "全部推送",
+      pushSelected: "推送所选",
+      pushing: "推送中…",
+      pushed: "已推送",
+      pushedRepos: "已推送 {{count}} 个仓库",
+      pushPartial: "已推送 {{ok}} / {{total}} 个仓库",
+      pushNoUpstream: "无上游分支",
+      pushNoRemote: "没有可推送的远端",
+      pushUpToDate: "已是最新",
+      pushNothingToPush: "没有可推送的内容：所有仓库都是最新的。",
+      pushDialogHint: "只推送勾选的仓库，其中一个失败不会阻止其他仓库。",
+      pushRowPushed: "{{branch}} → {{remote}}/{{branch}}",
+      relativeJustNow: "刚刚",
+      relativeMinutesAgo: "{{count}} 分钟前",
+      relativeHoursAgo: "{{count}} 小时前",
+      relativeDaysAgo: "{{count}} 天前",
     },
   };
 
@@ -421,12 +477,15 @@
   /** Every host call goes through here so a failure is data, never a throw. */
   async function invoke(channel, payload) {
     if (!bridge?.invoke) {
-      return { ok: false, message: "pluginBridge is unavailable outside PI-Desktop" };
+      // Dev-only path (outside PI-Desktop): reuse an existing host-state key
+      // rather than a hardcoded English fallback so user copy stays in t().
+      return { ok: false, message: t("noWorkspace") };
     }
     try {
       const result = await bridge.invoke(channel, payload ?? {});
       if (!result || typeof result !== "object") {
-        return { ok: false, message: `No response from ${channel}` };
+        // Keep the channel for diagnosis; the prefix is an existing key.
+        return { ok: false, message: `${t("gitOutput")}: ${channel}` };
       }
       return result;
     } catch (error) {
@@ -436,10 +495,14 @@
 
   async function copyText(text) {
     const result = await invoke("clipboard.writeText", { text: String(text ?? "") });
-    toast(result.ok ? t("copied") : result.message ?? "Copy failed", result.ok ? "info" : "error");
+    // Reuse the existing action key; the error level already says it failed.
+    toast(result.ok ? t("copied") : result.message ?? t("copy"), result.ok ? "info" : "error");
   }
 
   // --------------------------------------------------------------- dom ----
+  // No `html:` branch: innerHTML with user content is an XSS sink. Build with
+  // `text` and element children instead; only static templates may use
+  // innerHTML at their own call site, never through h(). Zero `html:` callers.
   function h(tag, props, children) {
     const node = document.createElement(tag);
     if (props) {
@@ -447,7 +510,6 @@
         if (value === undefined || value === null || value === false) continue;
         if (key === "class") node.className = value;
         else if (key === "text") node.textContent = value;
-        else if (key === "html") node.innerHTML = value;
         else if (key === "style" && typeof value === "object") Object.assign(node.style, value);
         else if (key === "dataset") Object.assign(node.dataset, value);
         else if (key.startsWith("on") && typeof value === "function") {
@@ -616,12 +678,20 @@
   /**
    * Bind shortcuts for one surface. `bindings` is `[{ spec, run }]`; the first
    * match wins, and the event is consumed so it cannot double-fire.
+   *
+   * Typing must win over shortcuts: while focus is in an input/textarea/select
+   * or contenteditable, non-Escape bindings are skipped so Ctrl+R etc. stay
+   * text. Escape-class bindings still run so a menu or dialog can always close.
    */
   function bindShortcuts(bindings) {
     const handler = (event) => {
       if (event.defaultPrevented) return;
+      const inField = Boolean(event.target?.closest?.("input, textarea, select, [contenteditable]"));
       for (const binding of bindings) {
         if (!matchesShortcut(binding.spec, event)) continue;
+        const specKey = String(binding.spec?.key ?? "").toLowerCase();
+        const isEscape = specKey === "escape" || specKey === "esc";
+        if (inField && !isEscape) continue;
         event.preventDefault();
         event.stopPropagation();
         binding.run();
@@ -768,7 +838,15 @@
     }
 
     function kindText(entry) {
-      return entry.kind === "submodule" ? t("submoduleBadge") : t("nestedRepoBadge");
+      if (entry.kind === "submodule") return t("submoduleBadge");
+      if (entry.kind === "sibling") return t("siblingRepoBadge");
+      return t("nestedRepoBadge");
+    }
+
+    function kindHint(entry) {
+      if (entry.kind === "submodule") return t("submoduleBadge");
+      if (entry.kind === "sibling") return t("siblingRepoHint");
+      return t("nestedRepoHint");
     }
 
     function paint() {
@@ -799,7 +877,7 @@
           label: repositoryLabel(entry),
           title: entry.kind === "root"
             ? entry.root
-            : `${entry.root} — ${entry.kind === "submodule" ? t("submoduleBadge") : t("nestedRepoHint")}`,
+            : `${entry.root} — ${kindHint(entry)}`,
           checked: entry.active,
           onSelect: async () => {
             if (entry.active) return;
@@ -902,6 +980,186 @@
       if (field) field.select();
     });
   }
+  // Note: 多仓 Push 对话框与两视图共用——按仓列出分支去向与 ahead，逐仓推送、单仓失败不挡其他仓；Commit and Push 复用同一逐仓推送 — 见 .agents/notes/implemented/architecture/2026-09-12-multi-repo-push.md
+  /**
+   * IDEA-style Push dialog: one row per repository (branch → remote,
+   * ahead/behind, checkbox, per-row result). Pushes the checked rows one by
+   * one via `git/push` with `repoRoot`, so no repository switch is needed.
+   * Resolves with the per-repo outcomes (or null when closed without pushing).
+   */
+  async function openPushDialog(options = {}) {
+    const loading = await invoke("git/push-statuses");
+    if (!loading?.ok) {
+      toast(errorText(loading), "error");
+      return null;
+    }
+    const repos = (loading.repos ?? []).slice();
+    if (!repos.length) {
+      toast(t("notARepository"), "error");
+      return null;
+    }
+    return new Promise((resolve) => {
+      const checked = new Map();
+      const outcomes = new Map();
+      for (const entry of repos) {
+        // Default to pushing what can be pushed; repos with no remote stay
+        // unchecked but visible, so the reason is seen, not hidden.
+        checked.set(entry.root, Boolean(entry.pushTarget));
+      }
+      const backdrop = h("div", {
+        style: {
+          position: "fixed",
+          inset: "0",
+          zIndex: "80",
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "center",
+          background: "color-mix(in oklab, #000 38%, transparent)",
+        },
+      });
+      const rowsHost = h("div", { class: "push-rows", style: { display: "flex", flexDirection: "column", gap: "6px", maxHeight: "320px", overflow: "auto", margin: "10px 0" } });
+      const hint = h("div", { class: "muted", style: { fontSize: "11px" }, text: t("pushDialogHint") });
+      const pushButton = h("button", { class: "primary", type: "button" }, [t("pushAll")]);
+      const closeButton = h("button", { class: "bordered", type: "button" }, [t("close")]);
+      let pushing = false;
+      let pushedAny = false;
+      const close = (value) => {
+        backdrop.remove();
+        document.removeEventListener("keydown", onKey, true);
+        resolve(value);
+      };
+      const onKey = (event) => {
+        if (event.key === "Escape") {
+          event.stopPropagation();
+          if (!pushing) close(pushedAny ? [...outcomes.values()] : null);
+        }
+      };
+      function branchText(entry) {
+        const head = entry.branch?.head ?? "";
+        if (!head) return entry.branch?.detached ? `detached @ ${String(entry.branch?.oid ?? "").slice(0, 8)}` : "";
+        if (entry.pushTarget) return tf("pushRowPushed", { branch: head, remote: entry.pushTarget.remote });
+        if (!entry.branch?.upstream) return `${head} · ${t("pushNoUpstream")}`;
+        return `${head} → ${entry.branch.upstream}`;
+      }
+      function countsText(entry) {
+        const ahead = entry.branch?.ahead ?? 0;
+        const behind = entry.branch?.behind ?? 0;
+        if (!ahead && !behind) return t("pushUpToDate");
+        const parts = [];
+        if (ahead) parts.push(`↑${ahead}`);
+        if (behind) parts.push(`↓${behind}`);
+        return parts.join(" ");
+      }
+      function paintRows() {
+        clear(rowsHost);
+        for (const entry of repos) {
+          const outcome = outcomes.get(entry.root);
+          const box = h("input", { type: "checkbox" });
+          box.checked = checked.get(entry.root) === true;
+          box.disabled = pushing || !entry.pushTarget;
+          box.addEventListener("change", () => { checked.set(entry.root, box.checked); });
+          const label = entry.rel === "." ? entry.name : entry.rel;
+          const kind = entry.kind === "submodule" ? t("submoduleBadge") : entry.kind === "sibling" ? t("siblingRepoBadge") : entry.kind === "root" ? "" : t("nestedRepoBadge");
+          const row = h("div", { class: "push-row", style: { display: "flex", gap: "8px", alignItems: "flex-start", padding: "6px 8px", border: "1px solid var(--border)", borderRadius: "6px" } }, [
+            box,
+            h("div", { style: { flex: "1 1 auto", minWidth: "0" } }, [
+              h("div", { style: { display: "flex", gap: "6px", alignItems: "center" } }, [
+                h("span", { style: { fontWeight: "600" }, text: label }),
+                kind ? h("span", { class: "badge", text: kind }) : null,
+                h("span", { class: "muted", style: { fontSize: "11px" }, text: countsText(entry) }),
+              ]),
+              h("div", { class: "muted", style: { fontSize: "11px" }, text: branchText(entry) }),
+              entry.pushError && !entry.pushTarget ? h("div", { style: { fontSize: "11px", color: "var(--status-conflict)" }, text: entry.pushError }) : null,
+              outcome ? h("div", { style: { fontSize: "11px", color: outcome.ok ? "var(--status-ok)" : "var(--status-conflict)" }, text: outcome.ok ? t("pushed") : errorText(outcome) }) : null,
+            ]),
+          ]);
+          rowsHost.append(row);
+        }
+      }
+      pushButton.onclick = async () => {
+        if (pushing) return;
+        const targets = repos.filter((entry) => checked.get(entry.root) && entry.pushTarget);
+        if (!targets.length) {
+          toast(t("pushNothingToPush"), "info");
+          return;
+        }
+        pushing = true;
+        pushButton.disabled = true;
+        pushButton.textContent = t("pushing");
+        paintRows();
+        for (const entry of targets) {
+          outcomes.set(entry.root, null);
+          paintRows();
+          const payload = {};
+          // The active repo needs no override; every other row pushes by path.
+          if (!entry.active) payload.repoRoot = entry.root;
+          else payload.repoRoot = entry.root;
+          if (!entry.branch?.upstream) payload.setUpstream = true;
+          let result = null;
+          try {
+            result = await invoke("git/push", payload);
+          } catch (error) {
+            result = { ok: false, message: String(error?.message ?? error) };
+          }
+          outcomes.set(entry.root, { ...result, rel: entry.rel, root: entry.root });
+          if (result?.ok) {
+            pushedAny = true;
+            try { await refreshTrackingRefs(result); } catch { /* keep pushing */ }
+          }
+          paintRows();
+        }
+        pushing = false;
+        pushButton.disabled = false;
+        pushButton.textContent = t("pushAll");
+        paintRows();
+        try { await options.onPushed?.([...outcomes.values()]); } catch { /* view refreshes anyway */ }
+      };
+      closeButton.onclick = () => { if (!pushing) close(pushedAny ? [...outcomes.values()] : null); };
+      const panel = h("div", {
+        class: "popup",
+        role: "dialog",
+        "aria-modal": "true",
+        style: { position: "relative", minWidth: "340px", maxWidth: "520px", width: "min(520px, 92vw)", padding: "14px", boxShadow: "0 16px 48px rgba(0,0,0,.4)" },
+      }, [
+        h("div", { style: { fontWeight: "600", marginBottom: "2px" }, text: t("pushDialogTitle") }),
+        h("div", { class: "muted", style: { fontSize: "11px" }, text: t("pushDialogSubtitle") }),
+        rowsHost,
+        hint,
+        h("div", { style: { display: "flex", justifyContent: "flex-end", gap: "8px", marginTop: "14px" } }, [
+          closeButton,
+          pushButton,
+        ]),
+      ]);
+      backdrop.append(panel);
+      backdrop.addEventListener("pointerdown", (event) => {
+        if (event.target === backdrop && !pushing) close(pushedAny ? [...outcomes.values()] : null);
+      });
+      document.body.append(backdrop);
+      document.addEventListener("keydown", onKey, true);
+      paintRows();
+      pushButton.focus();
+    });
+  }
+  /** Push several repos with the same options shape as the dialog rows. */
+  async function pushRepos(targets) {
+    const outcomes = [];
+    for (const target of targets ?? []) {
+      const payload = {};
+      if (target.root) payload.repoRoot = target.root;
+      if (target.setUpstream) payload.setUpstream = true;
+      let result = null;
+      try {
+        result = await invoke("git/push", payload);
+      } catch (error) {
+        result = { ok: false, message: String(error?.message ?? error) };
+      }
+      outcomes.push({ ...result, rel: target.rk ?? target.rel ?? "", root: target.root ?? null });
+      if (result?.ok) {
+        try { await refreshTrackingRefs(result); } catch { /* keep pushing */ }
+      }
+    }
+    return outcomes;
+  }
 
   /**
    * The message to show for a failed call: Git's own output plus, when the
@@ -915,7 +1173,8 @@
   function errorText(result) {
     const message = String(result?.message ?? "").trim();
     const remedy = remedyText(result);
-    if (!remedy) return message || "failed";
+    // Reuse an existing key; the caller already prefixes the action name.
+    if (!remedy) return message || t("gitOutput");
     return message ? `${message}\n\n${remedy}` : remedy;
   }
 
@@ -1023,18 +1282,20 @@
     if (!Number.isFinite(timestamp) || timestamp <= 0) return "";
     const reference = Number.isFinite(now) ? now : Date.now();
     const delta = reference - timestamp;
-    if (delta < 45 * 1000) return state.locale === "zh-CN" ? "刚刚" : "just now";
+    // Whole sentences live in STRINGS (see tf): no locale ternary here, and
+    // the English plural suffix travels as `s` so zh templates simply ignore it.
+    if (delta < 45 * 1000) return t("relativeJustNow");
     if (delta < HOUR) {
       const minutes = Math.max(1, Math.round(delta / MINUTE));
-      return state.locale === "zh-CN" ? `${minutes} 分钟前` : `${minutes} minute${minutes === 1 ? "" : "s"} ago`;
+      return tf("relativeMinutesAgo", { count: minutes, s: minutes === 1 ? "" : "s" });
     }
     if (delta < DAY) {
       const hours = Math.round(delta / HOUR);
-      return state.locale === "zh-CN" ? `${hours} 小时前` : `${hours} hour${hours === 1 ? "" : "s"} ago`;
+      return tf("relativeHoursAgo", { count: hours, s: hours === 1 ? "" : "s" });
     }
     if (delta < 30 * DAY) {
       const days = Math.round(delta / DAY);
-      return state.locale === "zh-CN" ? `${days} 天前` : `${days} day${days === 1 ? "" : "s"} ago`;
+      return tf("relativeDaysAgo", { count: days, s: days === 1 ? "" : "s" });
     }
     return formatDate(timestamp);
   }
@@ -1095,6 +1356,10 @@
    * The host announces project switches on `workspace:changed`. A view that
    * ignored it would keep showing the previous project's repository — which is
    * exactly the bug this exists to prevent.
+   *
+   * TODO: workspace-stale window refactor is out of scope — a stale-window flag
+   * with explicit loading state would beat this coalesce timer, but it touches
+   * every refresh path, so it stays a timer for now.
    */
   function watchWorkspace(handler) {
     // `workspace:changed` can arrive in bursts (the host announces a project
@@ -1161,8 +1426,9 @@
     popup,
     closePopup,
     dialog,
+    openPushDialog,
+    pushRepos,
     bindSplitter,
-    relativeTime,
     formatDate,
     formatDateTime,
     formatClock,

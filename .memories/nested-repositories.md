@@ -97,3 +97,21 @@ node tools/build.mjs && node tools/smoke.mjs commit zh-CN   # 视图渲染（桩
 `git/select-repo` → 子模块内 stage/commit → 回父仓库看 gitlink。
 视图断言用内置浏览器 CDP 直接读 DOM（芯片文案 / 徽标 / 下拉勾选态 / 切换后更新 /
 单仓库隐藏 / 一次刷新不再读仓库列表）。
+ 
+ ## 7. 2026-09-12 补充：Commit 视图聚合显示子模块改动（选择器保留）
+ 
+ 用户对照 IDEA 反馈"子模块里的文件看不到"（IDEA 按仓库聚合展示，插件默认停在父仓
+ 时只有一行 gitlink）。上面第 1 条"明确否决分组显示"的口径**部分作废**：否决的是
+ "只能看、不能操作"的分组；本次补上后，分组内暂存/diff/hunk/提交与切换过去完全等价。
+ 
+ - 新口径：Commit 视图默认聚合——父仓改动在上，每个**脏**子模块各一个分组
+   （带分支名 + "切换到该仓库"按钮）；Log/分支/储藏仍按 Root 选择器切换查看。
+ - 2026-09-12 晚些时候按 IDEA 截图改成两级排序：大类 → 仓库行（颜色块 + 名 +
+   "N 个文件" + 分支徽标，父仓参与字母序）→ 文件树；切换按钮收进仓库行右键菜单；
+   同屏颜色去重。详见聚合排序笔记。
+ - 引擎新增 `repoRoot` 显式覆盖（`withRepoAt`/`readRepoFor`，越界拒绝）与
+   `git/submodule-statuses`（只问 index 里已知的脏子模块，不走全树遍历）；
+   提交是"同信息逐仓提交，子模块先、父仓后"，`withPush` 只推当前仓。
+ - 详见 `.agents/notes/implemented/architecture/2026-09-12-submodule-aggregation.md`；
+   验证：`node tools/harness.mjs`（136/136）+ scratch `verify-agg.mjs`（14 条）。
+   另附带修好视图选项菜单的 `setAllInclusion` 未定义（点一次抛一次 `ReferenceError`）。

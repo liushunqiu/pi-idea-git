@@ -203,7 +203,8 @@ function gitEnv() {
  * @param {string[]} args
  * @param {{cwd?: string, input?: string, timeoutMs?: number}} [options]
  * `message` is the short form for a toast; on failure it is built from *both*
- * streams (`gitError`) and `detail` carries the whole of what Git said.
+ * streams (`gitError`) and `detail` carries what Git said, truncated to
+ * `ERROR_DETAIL_CHARS` (see `gitDetail`).
  * @returns {Promise<{ok: boolean, stdout: string, stderr: string, code: number|null, message?: string, detail?: string|null}>}
  */
 function runGit(args, options = {}) {
@@ -267,8 +268,9 @@ function runGit(args, options = {}) {
         stderr,
         code,
         message: failure ?? (code === 0 ? undefined : gitError(stdout, stderr, code)),
-        // The whole of what Git said, hints included: the toast shows `message`
-        // and links here, so nothing Git explained is lost to the six-line cap.
+        // `detail` is stdout+stderr for the dialog behind the toast, truncated to
+        // `ERROR_DETAIL_CHARS` with a trailing ellipsis (see `gitDetail`), so a
+        // runaway command cannot push megabytes through the bridge.
         detail: code === 0 ? undefined : gitDetail(stdout, stderr),
         truncated,
       };
@@ -279,14 +281,15 @@ function runGit(args, options = {}) {
       resolve(result);
     };
 
+    const effectiveTimeoutMs = options.timeoutMs ?? COMMAND_TIMEOUT_MS;
     const timer = setTimeout(() => {
       try {
         child.kill("SIGKILL");
       } catch {
         // Already gone.
       }
-      finish(null, `git ${args[0] ?? ""} timed out after ${Math.round(COMMAND_TIMEOUT_MS / 1000)}s`);
-    }, options.timeoutMs ?? COMMAND_TIMEOUT_MS);
+      finish(null, `git ${args[0] ?? ""} timed out after ${Math.round(effectiveTimeoutMs / 1000)}s`);
+    }, effectiveTimeoutMs);
 
     child.stdout.on("data", (chunk) => {
       outBytes += chunk.length;
@@ -304,7 +307,10 @@ function runGit(args, options = {}) {
     });
     child.stderr.on("data", (chunk) => {
       errBytes += chunk.length;
-      if (errBytes > MAX_OUTPUT_BYTES) return;
+      if (errBytes > MAX_OUTPUT_BYTES) {
+        truncated = true;
+        return;
+      }
       err.push(chunk);
     });
     child.on("error", (error) => finish(null, String(error?.message ?? error)));
@@ -1101,6 +1107,10 @@ async function refreshWorkspace() {
  * own repository: a checked-out submodule, or a repository nested anywhere
  * inside it. `null` means "the workspace's own repository", which keeps the
  * ordinary single-repository project free of any state.
+ * TODO: `selectedRoot` is module-global mutable state shared by overlapping
+ * `onPanelInvoke` calls; a `git/select-repo` racing a `readRepo` refresh can
+ * interleave the `refreshWorkspace` clear with the `isInside` check. Needs a
+ * generation counter or per-call snapshot, but that widens the change surface.
  */
 let selectedRoot = null;
 
@@ -1331,6 +1341,7 @@ async function submodulePaths(workspaceRoot, nested) {
  * not checked out is left out: there is no working tree to show or commit in.
  */
 async function discoverRepositories(workspaceRoot) {
+  const workspaceIsRepo = await resolveRepositoryRoot(workspaceRoot);
   const nested = scanNestedRepositories(workspaceRoot);
   const known = new Set(nested.map((entry) => entry.rel));
   for (const rel of await declaredSubmodulePaths(workspaceRoot)) {
@@ -1342,15 +1353,17 @@ async function discoverRepositories(workspaceRoot) {
     known.add(rel);
   }
 
-  const submodules = await submodulePaths(workspaceRoot, nested);
+  const submodules = workspaceIsRepo ? await submodulePaths(workspaceRoot, nested) : new Set();
   const repositories = nested
     .sort((left, right) => left.rel.localeCompare(right.rel))
     .map((entry) => ({
       root: entry.root,
       name: path.basename(entry.root),
       rel: entry.rel,
-      kind: submodules.has(entry.rel) ? "submodule" : "nested",
+      // Note: 平级模式无父仓 index 可问，kind 记 sibling 而不是 nested，视图据此显示“平级仓库” — 见 .agents/notes/implemented/architecture/2026-09-12-multi-repo-push.md
+      kind: !workspaceIsRepo ? "sibling" : (submodules.has(entry.rel) ? "submodule" : "nested"),
     }));
+  if (!workspaceIsRepo) return repositories;
   return [
     { root: workspaceRoot, name: path.basename(workspaceRoot), rel: ".", kind: "root" },
     ...repositories,
@@ -1376,10 +1389,56 @@ async function readRepo() {
   }
   const top = await runGit(["rev-parse", "--show-toplevel"]);
   if (!top.ok) {
+    // Note: 平级多仓回退——工作区本身不是仓库但内含仓库时，以首个/已选平级仓为当前仓（siblingMode），而不是 NO_REPOSITORY；无命中仍返回 NO_REPOSITORY，单仓库行为不变 — 见 .agents/notes/implemented/architecture/2026-09-12-multi-repo-push.md
+    // Sibling mode: the workspace is a plain folder containing repositories
+    // rather than a repository itself. Fall back to the selected (if still a
+    // repo inside it) or the first nested repository, so the repo list,
+    // aggregated commit and push dialog all work there too.
+    let siblings = [];
+    try {
+      siblings = scanNestedRepositories(cachedWorkspace);
+    } catch {
+      siblings = [];
+    }
+    if (!siblings.length) {
+      return {
+        ok: false,
+        code: "NO_REPOSITORY",
+        message: `Not a Git repository: ${cachedWorkspace}`,
+      };
+    }
+    let siblingRoot = null;
+    if (selectedRoot && isInside(cachedWorkspace, selectedRoot)) {
+      siblingRoot = await resolveRepositoryRoot(selectedRoot);
+      if (!siblingRoot) selectedRoot = null;
+    } else if (selectedRoot) {
+      selectedRoot = null;
+    }
+    if (!siblingRoot) {
+      const first = siblings.slice().sort((a, b) => String(a.rel).localeCompare(String(b.rel)))[0];
+      siblingRoot = (await resolveRepositoryRoot(first.root)) ?? first.root;
+      selectedRoot = siblingRoot;
+    }
+    if (!siblingRoot) {
+      return {
+        ok: false,
+        code: "NO_REPOSITORY",
+        message: `Not a Git repository: ${cachedWorkspace}`,
+      };
+    }
+    const siblingGitDir = await runGit(["rev-parse", "--absolute-git-dir"], { cwd: siblingRoot });
+    // Note: macOS 上 Git 给 /private/var 而宿主给 /var，直接 path.relative 会算出 ../../..；统一走 realPath（workspaceRelativeRoot 内部已做） — 见 nested-repositories 记忆第 2 节
+    const siblingRel = workspaceRelativeRoot(cachedWorkspace, siblingRoot);
     return {
-      ok: false,
-      code: "NO_REPOSITORY",
-      message: `Not a Git repository: ${cachedWorkspace}`,
+      ok: true,
+      root: siblingRoot,
+      name: path.basename(siblingRoot),
+      rel: siblingRel ?? path.basename(siblingRoot),
+      workspacePrefix: siblingRel,
+      workspaceRoot: cachedWorkspace,
+      siblingMode: true,
+      gitDir: siblingGitDir.ok ? siblingGitDir.stdout.trim() : path.join(siblingRoot, ".git"),
+      workspace: cachedWorkspace,
     };
   }
   const workspaceRoot = top.stdout.trim();
@@ -1432,12 +1491,62 @@ function workspaceRelativeRoot(workspace, root) {
   return target.slice(base.length + 1).split(path.sep).join("/");
 }
 
-/** Every repository-scoped command runs from the repository root. */
-async function withRepo(handler) {
-  const repo = await readRepo();
-  if (!repo.ok) return repo;
-  return handler(repo);
-}
+ /** Every repository-scoped command runs from the repository root. */
+ async function withRepo(handler) {
+   const repo = await readRepo();
+   if (!repo.ok) return repo;
+   return handler(repo);
+ }
+
+ // Note: 聚合视图用 repoRoot 直接作用子模块文件而不切换选中仓（父仓 status 永远只给一行 gitlink，见 .agents/notes/implemented/architecture/2026-09-12-submodule-aggregation.md）
+ /**
+  * Build the repo object for an explicit absolute path inside the current
+  * workspace's repository (the aggregated Commit view acting on a submodule's
+  * files without switching `selectedRoot`). Returns the base repo when no
+  * override was requested, so single-repo callers keep their behaviour.
+  */
+ function targetRootFromPayload(payload) {
+   const candidate = payload?.repoRoot ?? payload?.root ?? null;
+   return typeof candidate === "string" && candidate ? candidate : null;
+ }
+
+ async function readRepoFor(overrideRoot) {
+   const base = await readRepo();
+   if (!base.ok) return base;
+   if (!overrideRoot || samePath(overrideRoot, base.root)) return base;
+   if (!isInside(base.workspaceRoot, overrideRoot)) {
+     return { ok: false, message: `Not a repository inside this workspace: ${overrideRoot}` };
+   }
+   const resolved = await resolveRepositoryRoot(overrideRoot);
+   if (!resolved) {
+     return { ok: false, message: `Not a repository inside this workspace: ${overrideRoot}` };
+   }
+  const gitDir = await runGit(["rev-parse", "--absolute-git-dir"], { cwd: resolved });
+  const forRel = workspaceRelativeRoot(base.workspaceRoot, resolved) ?? path.relative(realPath(base.workspaceRoot), realPath(resolved));
+  return {
+    ok: true,
+    root: resolved,
+    name: path.basename(resolved),
+    rel: forRel ? String(forRel).split(path.sep).join("/") : ".",
+    workspacePrefix: workspaceRelativeRoot(base.workspace, resolved),
+    workspace: base.workspace,
+    workspaceRoot: base.workspaceRoot,
+    siblingMode: base.siblingMode === true,
+    gitDir: gitDir.ok ? gitDir.stdout.trim() : path.join(resolved, ".git"),
+  };
+ }
+
+ /**
+  * Like `withRepo`, but honours an explicit `repoRoot` (or legacy `root`) in
+  * the payload so one aggregated view can stage/diff/commit a submodule's
+  * files while the selector still points at the parent.
+  */
+ async function withRepoAt(payload, handler) {
+   const override = targetRootFromPayload(payload);
+   const repo = override ? await readRepoFor(override) : await readRepo();
+   if (!repo.ok) return repo;
+   return handler(repo);
+ }
 
 /**
  * The refs that say an operation is unfinished. None of them is visible in
@@ -1462,6 +1571,9 @@ async function probeOperation(repoRoot) {
 /**
  * The last answer `readOperation` gave, so the probe can stop asking on an
  * ordinary refresh without losing the answer exactly when it matters.
+ * TODO: single-slot cache keyed by one root; rapid switches between nested
+ * repositories (or overlapping `readStatus` calls) can clobber each other's
+ * answer. Needs a per-root map, but that changes eviction behaviour.
  */
 let pendingOperation = { root: null, operation: null };
 
@@ -1499,6 +1611,20 @@ function refArg(value) {
   if (!text) return "";
   if (text.startsWith("-") || /\s/.test(text)) return null;
   return text;
+}
+
+/**
+ * A branch name before it becomes a positional argument. Beyond the option
+ * prefix and whitespace, `..` (range) and `@{` (reflog) would change which
+ * revision Git resolves, and control characters never belong in a ref; Git's
+ * own `check-ref-format` would reject more (trailing `/`/`.`, `.lock`), but
+ * those only fail the command and their errors still bubble up.
+ */
+function isBranchNameSafe(value) {
+  if (/[\s~^:?*\[\\]/.test(value) || value.startsWith("-")) return false;
+  if (value.includes("..") || value.includes("@{")) return false;
+  if (/[\x00-\x1f\x7f]/.test(value)) return false;
+  return true;
 }
 
 // Note: 推送目标从 @{upstream} 解析，而不是硬编码 origin 或取 git remote 的第一个（字典序会决定分支发布到哪并顺手绑定 tracking）；没有 upstream 时只接受 origin 或唯一远端，多个远端时报错而不替用户猜 — 见 .agents/notes/implemented/architecture/2026-09-12-remote-sync-conflicts.md
@@ -1558,9 +1684,9 @@ const SEQUENCER = new Set(["merge", "rebase", "cherry-pick", "revert"]);
 /**
  * Shape a network command's outcome for the views.
  *
- * `message` is what a toast can hold; `detail` is everything Git said, hints
- * included, for the dialog behind it; the three hint codes are stable
- * identifiers that the views word in the user's own language.
+ * `message` is what a toast can hold; `detail` is stdout+stderr for the dialog
+ * behind it, truncated to `ERROR_DETAIL_CHARS` (see `gitDetail`); the three
+ * hint codes are stable identifiers that the views word in the user's own language.
  */
 function syncOutcome(channel, result) {
   if (result.ok) return { ok: true, stdout: result.stdout };
@@ -1609,6 +1735,8 @@ function labelFor(code, conflicted) {
  * `-z` suppresses the C-style path quoting, so spaces and non-ASCII paths come
  * back verbatim, and v2 keeps the index and worktree columns apart — which is
  * exactly the staged/unstaged split the UI shows.
+ * TODO: no pagination — a huge change list is returned whole over the bridge.
+ * Chunking needs a view-side protocol change, so behaviour stays as-is.
  */
 async function readStatus(repo) {
   const result = await runGit(
@@ -1765,6 +1893,127 @@ async function readStatus(repo) {
     conflicted,
   };
 }
+ /**
+  * Direct submodules (and embedded nested repos) with their own inner status.
+  *
+  * `git status` in the parent only prints one gitlink line per submodule
+  * (`1 .M S.M.. 160000 … backend`), so a parent-only Commit view can never
+  * show the 15 files changed inside `backend` the way IDEA does. This runs
+  * `readStatus` for each dirty submodule/nested repo found in the parent
+  * status, so the Commit view can render them inline like IDEA's grouped
+  * changes. Only dirty ones are queried: a clean submodule has no inner
+  * files to show, and probing every declared submodule on each refresh
+  * would cost a process per submodule even when there is nothing to show.
+  */
+async function readSubmoduleStatuses(repo, parentStatus) {
+  // Note: 平级模式无父仓可聚合，返回除当前仓外所有脏平级仓（kind sibling），视图复用同一分组渲染 — 见 .agents/notes/implemented/architecture/2026-09-12-multi-repo-push.md
+  if (repo?.siblingMode) {
+    let siblings = [];
+    try {
+      siblings = scanNestedRepositories(repo.workspaceRoot ?? repo.root);
+    } catch {
+      siblings = [];
+    }
+    const submodules = [];
+    for (const entry of siblings) {
+      let subRoot = null;
+      try {
+        subRoot = await resolveRepositoryRoot(entry.root);
+      } catch {
+        subRoot = null;
+      }
+      if (!subRoot || samePath(subRoot, repo.root)) continue;
+      // scan 已给出工作区相对 rel（realpath 安全），不重算 path.relative。
+      const rel = entry.rel;
+      if (!rel || rel === "." || rel.includes("..")) continue;
+      const subRepo = {
+        root: subRoot,
+        name: path.basename(subRoot),
+        rel,
+        workspacePrefix: workspaceRelativeRoot(repo.workspace, subRoot),
+        workspace: repo.workspace ?? null,
+        workspaceRoot: repo.workspaceRoot ?? repo.root,
+      };
+      let subStatus = null;
+      try {
+        subStatus = await readStatus(subRepo);
+      } catch {
+        subStatus = null;
+      }
+      if (!subStatus?.ok) continue;
+      const total = (subStatus.staged?.length ?? 0)
+        + (subStatus.unstaged?.length ?? 0)
+        + (subStatus.untracked?.length ?? 0)
+        + (subStatus.conflicted?.length ?? 0);
+      if (!total) continue;
+      submodules.push({ rel, root: subRoot, name: subRepo.name, kind: "sibling", status: subStatus });
+    }
+    submodules.sort((a, b) => String(a.rel).localeCompare(String(b.rel)));
+    return { ok: true, submodules };
+  }
+  const status = parentStatus?.ok ? parentStatus : await readStatus(repo);
+  if (!status.ok) return status;
+   const candidates = new Map();
+   for (const file of [...(status.staged ?? []), ...(status.unstaged ?? [])]) {
+     if (file?.submodule && file?.path) candidates.set(file.path, "submodule");
+   }
+   // Embedded (non-submodule) repos show as a single untracked dir entry;
+   // Git never descends into them, so their inner changes are invisible too.
+   // Only entries that actually resolve to a repository root are expanded,
+   // which keeps the 106-untracked-files case from spawning 106 processes.
+   for (const file of status.untracked ?? []) {
+     const rel = String(file?.path ?? "").replace(/\/+$/, "");
+     if (!rel || rel.includes("/")) continue;
+     if (candidates.has(rel) || candidates.has(`${rel}/`)) continue;
+     candidates.set(rel, "maybe-nested");
+   }
+   const submodules = [];
+   for (const [rel, kind] of candidates) {
+     const cleanRel = String(rel).replace(/\/+$/, "");
+     if (!cleanRel || cleanRel === "." || cleanRel.includes("..")) continue;
+     const absolute = path.join(repo.root, cleanRel);
+     if (!isInside(repo.workspaceRoot ?? repo.root, absolute)) continue;
+     let subRoot = null;
+     try {
+       subRoot = await resolveRepositoryRoot(absolute);
+     } catch {
+       subRoot = null;
+     }
+     if (!subRoot) continue;
+     if (kind === "maybe-nested" && samePath(subRoot, repo.root)) continue;
+     const relative = path.relative(repo.workspaceRoot ?? repo.root, subRoot);
+     const subRepo = {
+       root: subRoot,
+       name: path.basename(subRoot),
+       rel: relative ? relative.split(path.sep).join("/") : cleanRel,
+       workspacePrefix: workspaceRelativeRoot(repo.workspace, subRoot),
+       workspace: repo.workspace ?? null,
+       workspaceRoot: repo.workspaceRoot ?? repo.root,
+     };
+     let subStatus = null;
+     try {
+       subStatus = await readStatus(subRepo);
+     } catch {
+       subStatus = null;
+     }
+     if (!subStatus?.ok) continue;
+     const total = (subStatus.staged?.length ?? 0)
+       + (subStatus.unstaged?.length ?? 0)
+       + (subStatus.untracked?.length ?? 0)
+       + (subStatus.conflicted?.length ?? 0);
+     // A nested dir that turned out to be an empty/clean repo adds no signal.
+     if (!total) continue;
+     submodules.push({
+       rel: subRepo.rel,
+       root: subRoot,
+       name: subRepo.name,
+       kind: kind === "submodule" ? "submodule" : "nested",
+       status: subStatus,
+     });
+   }
+   submodules.sort((a, b) => String(a.rel).localeCompare(String(b.rel)));
+   return { ok: true, submodules };
+ }
 
 // ---------------------------------------------------------------------------
 // Diffs
@@ -1774,9 +2023,14 @@ async function readStatus(repo) {
  * Unstaged worktree diff, or the index diff when `mode === "index"`.
  * `--no-ext-diff` keeps a user-configured external diff tool from hijacking the
  * output, and `--no-color` keeps our own renderer authoritative.
+ * TODO: a very large diff is returned whole; truncating needs a view-side
+ * "show more" contract, so behaviour stays as-is.
  */
 async function readDiff(repo, filePath, mode, ignoreWhitespace) {
   if (!filePath) return { ok: false, message: "No file given." };
+  // Same boundary as stage/discard: the path arrives over the bridge and is
+  // passed to Git as a pathspec, so reject absolute/`..`/root shapes here.
+  if (!isSafePath(filePath)) return { ok: false, message: "Unsafe path rejected." };
   const base = [
     "diff",
     "--no-color",
@@ -1907,7 +2161,7 @@ async function readLog(repo, limit, options = {}) {
   const args = ["log", options.topo ? "--topo-order" : "--date-order", `--max-count=${count}`];
   // Naming a branch replaces `--all`; Git rejects the two together.
   if (branch) {
-    if (/[\s~^:?*\[\\]/.test(branch) || branch.startsWith("-")) {
+    if (!isBranchNameSafe(branch)) {
       return { ok: false, message: "Invalid branch filter." };
     }
     args.push(branch);
@@ -2035,12 +2289,20 @@ function requirePaths(payload) {
  * A path is only ever passed to Git as a pathspec after `--`, so it cannot be
  * mistaken for a revision or an option; this check rejects the two shapes that
  * are still dangerous regardless: absolute paths and `..` traversal.
+ * It also rejects anything that normalises to the repository root itself
+ * (`"."`, `""`, `"./"`): `discard` deletes untracked paths with `rmSync`, and
+ * without this `"."` would resolve to `repo.root` and delete the whole tree.
  */
 function isSafePath(value) {
   if (typeof value !== "string" || !value) return false;
   if (path.isAbsolute(value)) return false;
   const normalised = value.replace(/\\/g, "/");
-  return !normalised.split("/").includes("..");
+  if (normalised.split("/").includes("..")) return false;
+  // `normalize("./")` keeps the trailing slash (`"./"`), so strip it first:
+  // `"."`, `"./"`, `".//"` and `"a/.."` must all refuse as the repo root.
+  const stripped = normalised.replace(/\/+$/, "");
+  if (!stripped || path.posix.normalize(stripped) === ".") return false;
+  return true;
 }
 
 // ---------------------------------------------------------------------------
@@ -2065,6 +2327,7 @@ async function onPanelInvoke(channel, payload = {}) {
       if (!status.ok) return status;
       return {
         ...status,
+        siblingMode: repo.siblingMode === true,
         stashes: stashes.stashes ?? [],
         available: true,
         // Drives the Log's "My Commits" bolding.
@@ -2120,18 +2383,21 @@ async function onPanelInvoke(channel, payload = {}) {
       return { ok: true, active: next.rel, root: next.root, name: next.name };
     }
 
-    case "git/status":
-      return withRepo((repo) => readStatus(repo));
+     case "git/status":
+       return withRepoAt(payload, (repo) => readStatus(repo));
 
-    case "git/diff":
-      return withRepo((repo) =>
-        readDiff(
-          repo,
-          String(payload.path ?? ""),
-          payload.mode === "index" ? "index" : "worktree",
-          payload.ignoreWhitespace === true,
-        ),
-      );
+     case "git/submodule-statuses":
+       return withRepo(async (repo) => readSubmoduleStatuses(repo));
+
+     case "git/diff":
+       return withRepoAt(payload, (repo) =>
+         readDiff(
+           repo,
+           String(payload.path ?? ""),
+           payload.mode === "index" ? "index" : "worktree",
+           payload.ignoreWhitespace === true,
+         ),
+       );
 
     case "git/log":
       return withRepo((repo) =>
@@ -2181,100 +2447,112 @@ async function onPanelInvoke(channel, payload = {}) {
       return withRepo((repo) => readStashes(repo));
 
     // -- staging ------------------------------------------------------------
-    case "git/stage":
-    case "git/unstage": {
-      const paths = requirePaths(payload);
-      if (!paths.length) return { ok: false, message: "No paths given." };
-      if (!paths.every(isSafePath)) return { ok: false, message: "Unsafe path rejected." };
-      return withRepo(async (repo) => {
-        const staging = channel === "git/stage";
-        const args = staging
-          ? ["add", "--", ...paths]
-          : ["restore", "--staged", "--", ...paths];
-        let result = await runGit(args, { cwd: repo.root });
-        // `git restore --staged` needs HEAD; in a fresh repository there is none.
-        if (!staging && !result.ok) {
-          result = await runGit(["rm", "--cached", "-r", "--", ...paths], { cwd: repo.root });
-        }
-        return { ok: result.ok, message: result.ok ? undefined : result.message };
-      });
-    }
+     case "git/stage":
+     case "git/unstage": {
+       const paths = requirePaths(payload);
+       if (!paths.length) return { ok: false, message: "No paths given." };
+       if (!paths.every(isSafePath)) return { ok: false, message: "Unsafe path rejected." };
+       return withRepoAt(payload, async (repo) => {
+         const staging = channel === "git/stage";
+         const args = staging
+           ? ["add", "--", ...paths]
+           : ["restore", "--staged", "--", ...paths];
+         let result = await runGit(args, { cwd: repo.root });
+         // `git restore --staged` needs HEAD; in a fresh repository there is none.
+         if (!staging && !result.ok) {
+           result = await runGit(["rm", "--cached", "-r", "--", ...paths], { cwd: repo.root });
+         }
+         return { ok: result.ok, message: result.ok ? undefined : result.message };
+       });
+     }
 
-    case "git/discard": {
-      const paths = requirePaths(payload);
-      if (!paths.length) return { ok: false, message: "No paths given." };
-      if (!paths.every(isSafePath)) return { ok: false, message: "Unsafe path rejected." };
-      return withRepo(async (repo) => {
-        const tracked = [];
-        const removed = [];
-        for (const filePath of paths) {
-          // An untracked file has no worktree version to restore, so discarding
-          // it means deleting the file. Everything else is a worktree restore.
-          const check = await runGit(["ls-files", "--error-unmatch", "--", filePath], {
-            cwd: repo.root,
-          });
-          if (check.ok) tracked.push(filePath);
-          else removed.push(filePath);
-        }
-        const messages = [];
-        if (tracked.length) {
-          const result = await runGit(["restore", "--worktree", "--", ...tracked], {
-            cwd: repo.root,
-          });
-          if (!result.ok) messages.push(result.message);
-        }
-        for (const filePath of removed) {
-          try {
-            fs.rmSync(path.resolve(repo.root, filePath), { recursive: true, force: true });
-          } catch (error) {
-            messages.push(String(error?.message ?? error));
-          }
-        }
-        return { ok: messages.length === 0, message: messages.filter(Boolean).join("; ") || undefined };
-      });
-    }
+     case "git/discard": {
+       const paths = requirePaths(payload);
+       if (!paths.length) return { ok: false, message: "No paths given." };
+       if (!paths.every(isSafePath)) return { ok: false, message: "Unsafe path rejected." };
+       return withRepoAt(payload, async (repo) => {
+         const tracked = [];
+         const removed = [];
+         for (const filePath of paths) {
+           // An untracked file has no worktree version to restore, so discarding
+           // it means deleting the file. Everything else is a worktree restore.
+           const check = await runGit(["ls-files", "--error-unmatch", "--", filePath], {
+             cwd: repo.root,
+           });
+           if (check.ok) tracked.push(filePath);
+           else removed.push(filePath);
+         }
+         const messages = [];
+         if (tracked.length) {
+           const result = await runGit(["restore", "--worktree", "--", ...tracked], {
+             cwd: repo.root,
+           });
+           if (!result.ok) messages.push(result.message);
+         }
+         for (const filePath of removed) {
+           const resolved = path.resolve(repo.root, filePath);
+           // Defense in depth with `isSafePath`: never delete the repository root
+           // itself even if a `"."` pathspec slipped through.
+           if (samePath(resolved, repo.root)) {
+             messages.push(`Refused to discard repository root: ${filePath}`);
+             continue;
+           }
+           try {
+             fs.rmSync(resolved, { recursive: true, force: true });
+           } catch (error) {
+             messages.push(String(error?.message ?? error));
+           }
+         }
+         return { ok: messages.length === 0, message: messages.filter(Boolean).join("; ") || undefined };
+       });
+     }
 
-    case "git/apply-patch": {
-      const action = String(payload.action ?? "");
-      if (!["stage", "unstage", "discard"].includes(action)) {
-        return { ok: false, message: `Unknown patch action: ${action}` };
-      }
-      // A patch carries the file paths and the content it was built from, and
-      // `discard` writes to the worktree. The repository list is one click away
-      // and a switch starts a reload the user can click through, so a patch can
-      // outlive the repository it came from — where its paths can name a
-      // different file entirely. Refuse rather than edit the wrong one.
-      const from = typeof payload.root === "string" && payload.root ? payload.root : null;
-      return withRepo((repo) => {
-        if (from && !samePath(from, repo.root)) {
-          return {
-            ok: false,
-            code: "STALE_REPOSITORY",
-            message: "This diff came from another repository; refresh and try again.",
-          };
-        }
-        return applyPatch(repo, payload.patch, action);
-      });
-    }
+     case "git/apply-patch": {
+       const action = String(payload.action ?? "");
+       if (!["stage", "unstage", "discard"].includes(action)) {
+         return { ok: false, message: `Unknown patch action: ${action}` };
+       }
+       // A patch carries the file paths and the content it was built from, and
+       // `discard` writes to the worktree. The repository list is one click away
+       // and a switch starts a reload the user can click through, so a patch can
+       // outlive the repository it came from — where its paths can name a
+       // different file entirely. Refuse rather than edit the wrong one.
+       const from = typeof payload.root === "string" && payload.root ? payload.root : null;
+       // Aggregated view: `repoRoot` names the repo to act in, `root` the repo
+       // the diff was read from. Both are the submodule root for submodule
+       // files; legacy callers send only `root` and act in the selected repo.
+       const targetOverride = typeof payload.repoRoot === "string" && payload.repoRoot ? payload.repoRoot : null;
+       const runner = targetOverride ? (handler) => withRepoAt({ repoRoot: targetOverride }, handler) : withRepo;
+       return runner((repo) => {
+         if (from && !samePath(from, repo.root)) {
+           return {
+             ok: false,
+             code: "STALE_REPOSITORY",
+             message: "This diff came from another repository; refresh and try again.",
+           };
+         }
+         return applyPatch(repo, payload.patch, action);
+       });
+     }
 
-    // -- committing ---------------------------------------------------------
-    case "git/commit": {
-      const message = String(payload.message ?? "").trim();
-      if (!message && !payload.amend) return { ok: false, message: "Commit message is empty." };
-      return withRepo(async (repo) => {
-        const args = ["commit"];
-        if (payload.amend) args.push("--amend");
-        if (message) args.push("-F", "-");
-        else args.push("--no-edit");
-        if (payload.signoff) args.push("--signoff");
-        const result = await runGit(args, { cwd: repo.root, input: message });
-        return {
-          ok: result.ok,
-          stdout: result.stdout,
-          message: result.ok ? undefined : result.message,
-        };
-      });
-    }
+     // -- committing ---------------------------------------------------------
+     case "git/commit": {
+       const message = String(payload.message ?? "").trim();
+       if (!message && !payload.amend) return { ok: false, message: "Commit message is empty." };
+       return withRepoAt(payload, async (repo) => {
+         const args = ["commit"];
+         if (payload.amend) args.push("--amend");
+         if (message) args.push("-F", "-");
+         else args.push("--no-edit");
+         if (payload.signoff) args.push("--signoff");
+         const result = await runGit(args, { cwd: repo.root, input: message });
+         return {
+           ok: result.ok,
+           stdout: result.stdout,
+           message: result.ok ? undefined : result.message,
+         };
+       });
+     }
 
     case "git/last-message":
       return withRepo(async (repo) => {
@@ -2286,11 +2564,15 @@ async function onPanelInvoke(channel, payload = {}) {
     case "git/checkout":
       return withRepo(async (repo) => {
         const name = String(payload.name ?? "").trim();
-        const startPoint = String(payload.startPoint ?? "").trim();
+        const startPointRaw = String(payload.startPoint ?? "").trim();
+        // `startPoint` becomes a positional argument too: the same option-injection
+        // shape (`-b`, `--upload-pack=…`) must not pass through unchecked.
+        const startPoint = startPointRaw ? refArg(startPointRaw) : "";
         if (!name) return { ok: false, message: "Branch name is required." };
-        if (/[\s~^:?*\[\\]/.test(name) || name.startsWith("-")) {
+        if (!isBranchNameSafe(name)) {
           return { ok: false, message: "Branch name contains invalid characters." };
         }
+        if (startPoint === null) return { ok: false, message: "Invalid start point." };
         const args = payload.create
           ? ["switch", "--create", name, ...(startPoint ? [startPoint] : [])]
           : ["switch", name];
@@ -2303,12 +2585,11 @@ async function onPanelInvoke(channel, payload = {}) {
         }
         return { ok: result.ok, message: result.ok ? undefined : result.message };
       });
-
     case "git/create-branch":
       return withRepo(async (repo) => {
         const name = String(payload.name ?? "").trim();
         if (!name) return { ok: false, message: "Branch name is required." };
-        if (/[\s~^:?*\[\\]/.test(name) || name.startsWith("-")) {
+        if (!isBranchNameSafe(name)) {
           return { ok: false, message: "Branch name contains invalid characters." };
         }
         const result = await runGit(["branch", "--", name], { cwd: repo.root });
@@ -2336,7 +2617,8 @@ async function onPanelInvoke(channel, payload = {}) {
       const remote = refArg(payload.remote);
       const branch = refArg(payload.branch);
       if (remote === null || branch === null) return { ok: false, message: "Invalid remote or branch name." };
-      return withRepo(async (repo) => {
+      // Note: 聚合推送不切换选中仓——repoRoot 显式覆盖让 Push 对话框与 Commit and Push 逐仓推送，缺省仍是当前仓 — 见 .agents/notes/implemented/architecture/2026-09-12-multi-repo-push.md
+      return withRepoAt(payload, async (repo) => {
         const target = remote && branch ? { ok: true, remote, branch } : await resolvePushTarget(repo.root);
         if (!target.ok) return target;
         const args = ["push", target.remote, target.branch].filter(Boolean);
@@ -2352,6 +2634,51 @@ async function onPanelInvoke(channel, payload = {}) {
         const result = await runGit(args, { cwd: repo.root, timeoutMs: COMMAND_TIMEOUT_MS });
         return syncOutcome("git/push", result);
       });
+    }
+
+    case "git/push-statuses": {
+      const repo = await readRepo();
+      if (!repo.ok) return repo;
+      const repositories = await discoverRepositories(repo.workspaceRoot);
+      const out = [];
+      for (const entry of repositories) {
+        let resolved = null;
+        try {
+          resolved = await resolveRepositoryRoot(entry.root);
+        } catch {
+          resolved = null;
+        }
+        if (!resolved) continue;
+        // discover 已给出工作区相对 rel（realpath 安全），不重算。
+        const repoObj = {
+          root: resolved,
+          name: path.basename(resolved),
+          rel: entry.rel,
+          workspacePrefix: workspaceRelativeRoot(repo.workspace, resolved),
+          workspace: repo.workspace ?? null,
+          workspaceRoot: repo.workspaceRoot ?? resolved,
+        };
+        let status = null;
+        try {
+          status = await readStatus(repoObj);
+        } catch {
+          status = null;
+        }
+        if (!status?.ok) continue;
+        const target = await resolvePushTarget(resolved);
+        out.push({
+          rel: repoObj.rel,
+          root: resolved,
+          name: repoObj.name,
+          kind: entry.kind,
+          active: samePath(resolved, repo.root),
+          branch: status.branch,
+          pushTarget: target.ok ? { remote: target.remote, branch: target.branch } : null,
+          pushError: target.ok ? null : (target.message ?? null),
+        });
+      }
+      out.sort((a, b) => String(a.rel).localeCompare(String(b.rel)));
+      return { ok: true, repos: out };
     }
 
     case "git/pull": {
@@ -2421,9 +2748,16 @@ async function onPanelInvoke(channel, payload = {}) {
         if (action === "push") {
           args = ["stash", "push", "--include-untracked", "--message", String(payload.message ?? "").trim() || "IDEA Git stash"];
         } else if (action === "pop" || action === "apply") {
-          args = ["stash", action, String(payload.ref ?? "")].filter(Boolean);
+          const ref = String(payload.ref ?? "").trim();
+          // Only `stash@{n}` may reach Git: anything else is either an option
+          // (`--help`) or a revision that names the wrong object. Empty means
+          // the top stash, which is what `git stash pop` does with no ref.
+          if (ref && !/^stash@\{\d+\}$/.test(ref)) return { ok: false, message: "Invalid stash ref." };
+          args = ["stash", action, ...(ref ? [ref] : [])];
         } else if (action === "drop") {
-          args = ["stash", "drop", String(payload.ref ?? "")].filter(Boolean);
+          const ref = String(payload.ref ?? "").trim();
+          if (ref && !/^stash@\{\d+\}$/.test(ref)) return { ok: false, message: "Invalid stash ref." };
+          args = ["stash", "drop", ...(ref ? [ref] : [])];
         } else {
           return { ok: false, message: `Unknown stash action: ${action}` };
         }
@@ -2440,8 +2774,8 @@ async function onPanelInvoke(channel, payload = {}) {
       return { ok: true, models: listing.models, preferred: (await readPrefs()).ui?.commitModelKey ?? "" };
     }
 
-    case "git/commit-message":
-      return withRepo((repo) => draftCommitMessage(repo, payload));
+     case "git/commit-message":
+       return withRepoAt(payload, (repo) => draftCommitMessage(repo, payload));
 
     // -- commit-level actions (Log) ------------------------------------------
     case "git/cherry-pick":
@@ -2460,6 +2794,9 @@ async function onPanelInvoke(channel, payload = {}) {
       });
     }
 
+    // TODO: `reset --hard`/`--keep` discards worktree content with no backup and
+    // no server-side confirmation; removing the modes needs a UI/UX decision
+    // (confirm dialog, reflog note), so behaviour stays as-is.
     case "git/reset": {
       const hash = String(payload.hash ?? "");
       if (!/^[0-9a-f]{4,64}$/i.test(hash)) return { ok: false, message: "Invalid commit hash." };
