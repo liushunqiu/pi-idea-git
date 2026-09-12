@@ -610,6 +610,51 @@ textarea {
 .tiny-button:hover {
   background: color-mix(in oklab, var(--fg) 14%, transparent);
 }
+/* ------------------------------------------------------------- tree rows --- */
+
+/* A folder row keeps the file rows' rhythm but reads as structure: its name is
+   darker than a file's, and its icon says which of the two it is without the
+   user parsing the indentation. */
+.tree-row.dir-row {
+  font-weight: 600;
+}
+
+.tree-row.dir-row .name {
+  color: var(--fg);
+}
+
+.tree-row.dir-row .count {
+  color: var(--fg-muted);
+  font-size: 11px;
+  font-weight: 400;
+}
+
+.tree-row.dir-row .meta {
+  margin-left: 6px;
+  padding-left: 0;
+}
+
+.tree-row .row-icon {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  color: var(--fg-secondary);
+}
+
+/* The folder's own disclosure sits between its checkbox and its icon, so the
+   arrow lines up with the one on a group header rather than with the checkbox
+   column. */
+.tree-row.dir-row .disclosure {
+  margin: 0 -2px;
+}
+
+/* Narrow work panels are the normal case here, and the folder count is the
+   first thing that can go without losing meaning. */
+@media (max-width: 420px) {
+  .tree-row.dir-row .meta {
+    display: none;
+  }
+}
 
 /* -------------------------------------------------------------------- diff */
 

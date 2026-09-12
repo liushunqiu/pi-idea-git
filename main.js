@@ -360,18 +360,125 @@ function authHint(stderr) {
  */
 
 /** Enough history for the model to copy the repository's conventions. */
-const STYLE_SAMPLE_COMMITS = 20;
-/** The patch is a prompt, not a backup: keep it small enough to stay quick. */
+const STYLE_SAMPLE_COMMITS = 40;
+/** The diff is a prompt, not a backup: keep it small enough to stay quick. */
 const MAX_PROMPT_PATCH_CHARS = 12_000;
 
-const COMMIT_SYSTEM = [
-  "You write Git commit messages.",
-  "Reply with the commit message only: no preamble, no explanation, no code fences, no surrounding quotes.",
-  "First line: imperative mood, at most 72 characters, no trailing full stop.",
-  "If the change needs it, add a blank line and a short body saying why the change was made; do not restate the diff line by line.",
-  "Write in the same language as the commit subjects you are given.",
-  "When the change is trivial and self-evident, one subject line is enough.",
-].join(" ");
+/**
+ * The instruction the model follows.
+ *
+ * "Match the repository" is the obvious rule and the one that used to be here,
+ * but it leaves two things to a guess: the language, which then follows training
+ * data back to English however Chinese the user is, and the shape of a good
+ * message, which the model has seen plenty of but not necessarily in this diff.
+ * So the language arrives as a parameter, and the facts `buildCommitContext`
+ * measured about the repository (language, subject prefix, body usage) arrive
+ * with the request.
+ *
+ * The prompt is deliberately long. A commit subject is short-lived in attention
+ * but permanent in history, and every clause below answers a failure that shows
+ * up in real drafts: a code fence, a "commit message:" prefix, a body that
+ * restates the diff, an English subject on a Chinese project, a subject that
+ * never ends, punctuation half full-width.
+ */
+function buildSystemPrompt(lang, style) {
+  // The history's language and the drafted message's language are two different
+  // things, and the model will follow whichever it is told about last. So every
+  // branch below states the language the message MUST be written in, then says
+  // what the history is for: evidence of tone and structure, never a licence to
+  // switch language.
+  //
+  // This note is keyed on the history being *empty*, not on its language being
+  // unmeasurable: a repository whose subjects carry no letters still has a
+  // history, and telling the model otherwise would contradict the samples it is
+  // shown in the same request.
+  const noHistory = style.count === 0;
+  const historyNote = noHistory
+    ? "This repository has no commit history to follow, so the rules above are the only guidance on how the message reads."
+    : null;
+
+  const languageRule = lang === "zh"
+    ? [
+        "Write the commit message in Simplified Chinese, including the subject and every line of the body.",
+        style.language === "zh"
+          ? "The repository's own history is Chinese too, so match its tone as well."
+          : style.language === "en"
+            ? "The repository's history is in English, but that is not the language of this message: use Chinese anyway, and use that history only as a model for structure and for how long a subject runs."
+            : historyNote ?? "The repository's history gives no clear signal about wording; follow the rules above.",
+        "Use half-width punctuation where characters are ASCII and full-width where they are Chinese: `feat(登录): 支持短信验证码`, not `feat（登录）:支持短信验证码`.",
+      ]
+    : [
+        "Write the commit message in English, including the subject and every line of the body.",
+        "Keep the subject in the imperative mood, start it with a capital letter, and do not end it with a full stop.",
+        // The same guard the Chinese branch carries, for the same reason: a
+        // Chinese history must not drag an explicitly-English draft into
+        // Chinese.
+        style.language === "zh"
+          ? "The repository's history is Chinese, but that is not the language of this message: use English anyway, and use that history only as a model for structure and for how long a subject runs."
+          : historyNote ?? "The repository's history gives no clear signal about wording; follow the rules above.",
+      ].filter(Boolean);
+
+  const conventional = style.conventional
+    ? "This repository prefixes its subjects: `type(scope): description`. Keep that shape, keep the `type` and `scope` in ASCII exactly as the samples spell them, and pick the one type that dominates this change. If the samples use no scope, leave the parentheses out rather than inventing one."
+    : "Do not invent a `type:` prefix. Follow the subject shape this repository already uses.";
+
+  // Keyed off the language the message is actually written in, not off the
+  // repository's measured history: for a Chinese draft the guidance on line
+  // length has to be the Chinese one even when the history was English or empty.
+  const bodyStyle = lang === "zh"
+    ? "In the body wrap English lines near 72 columns and keep Chinese lines short; write each bullet as one idea rather than one file."
+    : "In the body wrap English lines near 72 columns; write each bullet as one idea rather than one file.";
+
+  return [
+    "You write a single Git commit message.",
+    "Reply with that message and nothing else: no preamble, no explanation, no analysis, no markdown code fences, no `commit message:` label, no surrounding quotes.",
+    "First line is the subject; it states what the change does, never what it is.",
+    "Keep the subject short: aim for 50 characters and never exceed 72. A Chinese character is about twice as wide as a Latin one, so a Chinese subject stays under about 25 characters, and the subject is a single line — never continue it into the first sentence of the body.",
+    "The blank line after the subject is mandatory. Git treats every line up to the first blank line as the title, so a message without it has no body at all — only one enormous subject.",
+    "The body says why the change was made and what it makes different from here on: not a file list, not a walk through the diff, not the names of the functions you saw. Write one idea per line, and when the change has several parts give each part its own line.",
+    "When the change is thoroughly self-evident, the subject alone is the whole message.",
+    bodyStyle,
+    "After the body, leave another blank line and then footers, when they apply: `BREAKING CHANGE: <what callers must do>` for a change that is not backward compatible. Do not add any other trailer.",
+    "Never mention that you wrote the message, never address the user, and never ask a question.",
+    conventional,
+    // A worked example beats another rule, and it is the one thing that fixes
+    // the failure this prompt kept hitting: the model knew the words "blank
+    // line" and still returned subject-then-body with nothing between them.
+    // Showing the shape is unambiguous in a way the sentence was not.
+    "Reply in exactly this shape, with your own content:",
+    "<commit-message>",
+    ...(lang === "zh"
+      ? [
+          style.conventional ? "feat(登录): 支持短信验证码登录" : "支持短信验证码登录",
+          "",
+          "- 验证码 60 秒内可重发，过期后提示重新获取",
+          "- 连续失败三次锁定十分钟，避免被暴力猜解",
+          "- 未登录用户仍可用密码登录，行为不变",
+        ]
+      : [
+          style.conventional ? "feat(auth): add SMS code sign-in" : "Add SMS code sign-in",
+          "",
+          "- Let the code be resent after 60 seconds and say so once it expires",
+          "- Lock the account for ten minutes after three failed attempts",
+          "- Password sign-in is unchanged for accounts without a phone number",
+        ]),
+    "</commit-message>",
+    ...languageRule,
+  ].join("\n");
+}
+
+/**
+ * Which language the message must be written in. `auto` is not "guess": it is
+ * the language the repository's own subjects are written in, measured by
+ * `commitStyle`, and it falls back to the view's locale so a brand-new
+ * repository still lands in the language the user reads.
+ */
+function resolveCommitLang(preference, style, locale) {
+  if (preference === "zh") return "zh";
+  if (preference === "en") return "en";
+  if (style.language) return style.language;
+  return String(locale ?? "").toLowerCase().startsWith("zh") ? "zh" : "en";
+}
 
 /** Strip the shapes a model adds around a message even when told not to. */
 function tidyCommitMessage(raw) {
@@ -382,9 +489,288 @@ function tidyCommitMessage(raw) {
   return text.replace(/\s+$/, "");
 }
 
+// ---------------------------------------------------------------------------
+// Shaping the message
+//
+// The model is asked for a shape; this section *enforces* it. Everything here
+// answers a defect that shows up in real drafts and that a prompt alone did not
+// prevent:
+//
+//   - the body begins on the line straight after the subject, with no blank
+//     line between them. Git takes everything up to the first blank line as the
+//     title, so that draft is one enormous subject — the defect a reader
+//     reports as "this is not a proper commit message".
+//   - the body is one run-on sentence, or three ideas joined by `；`, where one
+//     idea per line belongs.
+//   - nothing is wrapped: a model does not measure columns, so a Chinese body
+//     arrives as a single 150-column line.
+//
+// None of it rewrites the model's words. It only puts those words where Git
+// expects to find them.
+// ---------------------------------------------------------------------------
+
 /**
- * What the model gets to read: the change, plus a sample of the repository's
- * own subjects so it can match tone and language instead of inventing a style.
+ * Display width, not `String.length`: every terminal and every web Git host
+ * renders a CJK glyph two columns wide, which is why the 50/72 rule from
+ * git-commit(1) means about 25 Chinese characters rather than 50.
+ */
+const WIDE_CHAR = /[\u1100-\u115f\u2e80-\u303e\u3041-\u33ff\u3400-\u4dbf\u4e00-\u9fff\ua000-\ua4cf\uac00-\ud7a3\uf900-\ufaff\ufe30-\ufe6f\uff00-\uff60\uffe0-\uffe6]/;
+
+function textWidth(value) {
+  let width = 0;
+  for (const char of String(value ?? "")) width += WIDE_CHAR.test(char) ? 2 : 1;
+  return width;
+}
+
+/** git-commit(1) asks for 50 columns and tools start truncating at 72. */
+const SUBJECT_TARGET_WIDTH = 50;
+const SUBJECT_MAX_WIDTH = 72;
+const BODY_WRAP_WIDTH = 72;
+
+/**
+ * Hard-wrap to `limit` columns. Latin breaks at the last space so words survive
+ * intact; CJK has no spaces and may break between any two characters, which is
+ * what a reader of Chinese expects anyway.
+ */
+function wrapText(value, limit) {
+  const out = [];
+  let line = "";
+  const flush = () => {
+    if (line) out.push(line);
+    line = "";
+  };
+  for (const char of String(value ?? "")) {
+    if (char === "\n") {
+      flush();
+      continue;
+    }
+    if (!line || textWidth(line) + textWidth(char) <= limit) {
+      line += char;
+      continue;
+    }
+    const space = line.lastIndexOf(" ");
+    // Only honour a space in the back half of the line: breaking at one far to
+    // the left would leave every wrapped line ragged.
+    if (space >= limit / 2) {
+      out.push(line.slice(0, space));
+      line = `${line.slice(space + 1)}${char}`;
+    } else {
+      flush();
+      line = char;
+    }
+  }
+  flush();
+  return out;
+}
+
+/** A title is never a list item and never ends in punctuation. */
+const TITLE_TRIM = /^[-*+\s]+|[\s。．.，,；;：:、]+$/g;
+
+/**
+ * Keep the subject a subject. Handed a change with three parts, a model tends to
+ * write all three into the first line, which is how a subject ends up past the
+ * 72-column ceiling and reads like a paragraph. The overflow moves into the body
+ * at a clause boundary rather than being truncated: nothing the model saw in the
+ * diff is discarded, it is only put where Git expects it.
+ */
+function splitSubject(value) {
+  const subject = String(value ?? "").replace(TITLE_TRIM, "");
+  if (textWidth(subject) <= SUBJECT_MAX_WIDTH) return { subject, rest: [] };
+
+  const boundaries = [];
+  const pattern = /[，,；;：:。！？!?]\s*/g;
+  let match;
+  while ((match = pattern.exec(subject))) boundaries.push(match.index + match[0].length);
+  const fitsTarget = boundaries
+    .filter((index) => textWidth(subject.slice(0, index)) <= SUBJECT_TARGET_WIDTH)
+    .pop();
+  const fitsCeiling = boundaries.find((index) => textWidth(subject.slice(0, index)) <= SUBJECT_MAX_WIDTH);
+  const cut = fitsTarget ?? fitsCeiling;
+  // No boundary fits: the subject is one unbroken phrase, and cutting it would
+  // invent a title the model never wrote. Leave it alone.
+  if (!cut) return { subject, rest: [] };
+
+  return {
+    subject: subject.slice(0, cut).replace(TITLE_TRIM, ""),
+    rest: [subject.slice(cut).trim()],
+  };
+}
+
+/**
+ * Chinese punctuation inside Chinese text. Models drift to the ASCII `,` and
+ * `;` mid-sentence, which reads as a typo in a commit log. The guard is strictly
+ * Han-on-both-sides, so `feat(a,b): 支持` and anything else in ASCII — paths,
+ * identifiers, URLs — is left exactly as written.
+ */
+function normalizeCommitPunctuation(value) {
+  return String(value ?? "").replace(
+    /([\p{Script=Han}])([,;])(?=[\p{Script=Han}])/gu,
+    (match, before, mark) => `${before}${mark === "," ? "，" : "；"}`,
+  );
+}
+
+/** A body line indented under the bullet above it — the shape wrapping produces. */
+const CONTINUATION_LINE = /^[ \t]/;
+
+/**
+ * Rejoin a line with the one it was wrapped from. Latin wrapping consumes the
+ * space it broke at, so it has to be put back; CJK wrapping breaks between two
+ * characters and must not gain one. Asking whether the two ends are ASCII is
+ * enough to tell those apart, and it is what makes this function idempotent.
+ */
+function joinWrapped(previous, next) {
+  const needsSpace = /[A-Za-z0-9,;:.)\]"'`]$/.test(previous) && /^[A-Za-z0-9(\["'`]/.test(next);
+  return needsSpace ? `${previous} ${next}` : `${previous}${next}`;
+}
+
+/** One logical line of the body, rendered into `out` at Git's 72-column width. */
+function renderParagraph(out, text) {
+  const bullet = /^[-*+]\s+/.exec(text);
+  // A semicolon joins separate ideas, and the prompt asked for one idea per
+  // line — but only when the line is long enough for that to be the problem:
+  // splitting `修复拼写；无行为变化` into two bullets would be noise.
+  const clauses = bullet ? [text] : text.split(/[；;]/).map((part) => part.trim()).filter(Boolean);
+  if (clauses.length > 1 && textWidth(text) > SUBJECT_TARGET_WIDTH) {
+    for (const clause of clauses) {
+      // The marker spends two columns, so the text keeps the same right edge.
+      wrapText(clause, BODY_WRAP_WIDTH - 2).forEach((line, index) => {
+        out.push(index ? `  ${line}` : `- ${line}`);
+      });
+    }
+    return;
+  }
+  if (bullet) {
+    const indent = " ".repeat(bullet[0].length);
+    wrapText(text.slice(bullet[0].length), BODY_WRAP_WIDTH - bullet[0].length).forEach((line, index) => {
+      out.push(index ? `${indent}${line}` : `${bullet[0]}${line}`);
+    });
+    return;
+  }
+  out.push(...wrapText(text, BODY_WRAP_WIDTH));
+}
+
+/**
+ * The message the user actually receives — shaped here rather than trusted from
+ * the model. `subject` is one line; exactly one blank line separates it from the
+ * body, even when the model forgot it; the body is wrapped to Git's 72 columns,
+ * and semicolon-joined clauses become one bullet each.
+ *
+ * Idempotent on a well-formed draft, which matters because this runs on every
+ * reply and that reply may already be correct: a subject under the ceiling keeps
+ * its line, a body already broken into bullets is only re-wrapped (its
+ * continuation lines are re-joined first, then wrapped to the same result), and
+ * a paragraph with a single clause stays prose.
+ */
+function formatCommitMessage(raw) {
+  const text = normalizeCommitPunctuation(tidyCommitMessage(raw)).replace(/\r\n?/g, "\n");
+  const lines = text.split("\n").map((line) => line.replace(/\s+$/, ""));
+
+  let index = 0;
+  while (index < lines.length && !lines[index].trim()) index++;
+  if (index >= lines.length) return "";
+  const { subject, rest } = splitSubject(lines[index].trim());
+  index++;
+
+  // Fold the body into logical lines. An indented line continues the line above
+  // it, which is how this function itself writes a wrapped bullet or sentence; a
+  // blank line is a paragraph break and nothing else is.
+  const logical = [];
+  let pending = null;
+  for (const line of lines.slice(index)) {
+    if (!line.trim()) {
+      if (pending) {
+        logical.push(pending);
+        pending = null;
+      }
+      if (logical.length && !logical[logical.length - 1].paragraphBreak) {
+        logical.push({ paragraphBreak: true });
+      }
+      continue;
+    }
+    if (pending && CONTINUATION_LINE.test(line)) {
+      pending = { text: joinWrapped(pending.text, line.trim()) };
+      continue;
+    }
+    if (pending) logical.push(pending);
+    pending = { text: line.trim() };
+  }
+  if (pending) logical.push(pending);
+  while (logical.length && logical[logical.length - 1].paragraphBreak) logical.pop();
+
+  const body = [];
+  for (const item of [...rest.map((text_) => ({ text: text_ })), ...logical]) {
+    if (item.paragraphBreak) {
+      // Paragraph breaks the model wrote are preserved, never doubled.
+      if (body.length && body[body.length - 1] !== "") body.push("");
+      continue;
+    }
+    renderParagraph(body, item.text);
+  }
+  while (body.length && body[body.length - 1] === "") body.pop();
+
+  return body.length ? `${subject}\n\n${body.join("\n")}` : subject;
+}
+
+/** A subject prefix (`fix(parser)!: …`) — the pattern, not its type names. */
+const SUBJECT_PREFIX = /^[a-z][a-z0-9-]*(?:\([^)\n]{1,30}\))?!?: \S/;
+
+/**
+ * What the repository's recent history says about how to write here: which
+ * language it commits in, whether it prefixes its subjects, and whether anyone
+ * writes a body. Read from full messages rather than subjects, because the last
+ * two are properties of the whole message.
+ *
+ * `language` is `null` only when there is nothing to measure — an empty history,
+ * or subjects with no letters at all. It used to collapse that case to `"en"`,
+ * which made `resolveCommitLang`'s locale fallback dead code: a brand-new
+ * repository drafted in English no matter which language the window spoke.
+ * "Unknown" is a real answer and has to survive this far for the caller to act
+ * on it — but it must stay reserved for that case. A repository that *does*
+ * have history has a language, and folding a tie into `null` would hand a
+ * Chinese repository to the locale fallback just because its subjects also
+ * contain ASCII.
+ */
+function commitStyle(samples) {
+  // A subject with Chinese in it is a Chinese subject, full stop: the two
+  // buckets are mutually exclusive rather than both-incrementing. Counting
+  // `feat(登录): 支持短信验证码` in *both* buckets (it has CJK and a 3-letter
+  // ASCII run) made every subject in a Chinese Conventional-Commits repository
+  // cancel out, so the tie-break decided the language instead of the evidence.
+  const isChinese = (value) => /[\u3400-\u9fff]/.test(value);
+  const chinese = samples.filter((entry) => isChinese(entry.subject)).length;
+  const english = samples.filter(
+    (entry) => !isChinese(entry.subject) && /[A-Za-z]{3}/.test(entry.subject),
+  ).length;
+  return {
+    // `count` is what callers need to tell "no history" apart from "history I
+    // could not classify": `language` is null in both cases, but only the first
+    // one lets the prompt say the repository has no history.
+    count: samples.length,
+    language: chinese || english ? (chinese >= english ? "zh" : "en") : null,
+    conventional: samples.filter((entry) => SUBJECT_PREFIX.test(entry.subject)).length >= 2,
+    bodies: samples.some((entry) => entry.body),
+  };
+}
+
+/**
+ * Parse `git log --format=%s%x00%b%x1e` into subjects and bodies. The
+ * separators are control characters, which no commit message can contain, so
+ * this stays a split rather than a regex over user text.
+ */
+function parseStyleSamples(stdout) {
+  return String(stdout ?? "")
+    .split(RS_CHAR)
+    .map((record) => {
+      const [subject, body] = record.split(FS_CHAR);
+      return { subject: String(subject ?? "").trim(), body: String(body ?? "").trim() };
+    })
+    .filter((entry) => entry.subject);
+}
+
+/**
+ * What the model gets to read: the change, plus what the repository's own
+ * history says about how a message is written here. The facts are computed by
+ * us and stated in prose; the samples stay as evidence of tone.
  */
 async function buildCommitContext(repo, payload) {
   const path = typeof payload?.path === "string" && payload.path.trim() ? payload.path.trim() : null;
@@ -396,11 +782,13 @@ async function buildCommitContext(repo, payload) {
     return { ok: false, code: "BAD_PATH", message: "Unsafe path rejected." };
   }
 
-  const style = await runGit(
-    ["log", `-${STYLE_SAMPLE_COMMITS}`, "--pretty=format:%s"],
+  const log = await runGit(
+    ["log", `-${STYLE_SAMPLE_COMMITS}`, `--pretty=format:%s${FS_CHAR}%b${RS_CHAR}`],
     { cwd: repo.root },
   );
-  const styleLines = style.ok ? style.stdout.split("\n").filter((line) => line.trim()) : [];
+  const samples = log.ok ? parseStyleSamples(log.stdout) : [];
+  const style = commitStyle(samples);
+  const lang = resolveCommitLang(payload?.lang, style, payload?.locale);
 
   let patch = "";
   let scope = "";
@@ -422,8 +810,13 @@ async function buildCommitContext(repo, payload) {
     if (!diff.ok) return { ok: false, code: "NO_DIFF", message: diff.message ?? "No changes to describe." };
     patch = diff.stdout;
     scope = { kind: "staged" };
-    const names = await runGit(["diff", "--cached", "--name-only"], { cwd: repo.root });
-    files = names.ok ? names.stdout.split("\n").filter((line) => line.trim()) : [];
+    // `status --porcelain` folds a rename into one record and marks a
+    // conflicted file once, where `diff --name-only` repeats a path that is
+    // changed in both the index and the worktree.
+    const names = await runGit(["status", "--porcelain", "--untracked-files=no"], { cwd: repo.root });
+    files = names.ok
+      ? [...new Set(names.stdout.split("\n").map((line) => line.slice(3).trim()).filter(Boolean))]
+      : [];
   }
 
   if (!patch.trim()) {
@@ -436,34 +829,67 @@ async function buildCommitContext(repo, payload) {
     };
   }
 
-  // The prompt describes the scope in prose; the caller gets the structure above
-  // and phrases it in the user's language.
-  const scopeLabel = scope.kind === "staged"
-    ? "everything currently staged"
-    : `${mode === "index" ? "staged" : "working tree"} file ${path}`;
-
   const truncated = patch.length > MAX_PROMPT_PATCH_CHARS;
+  // State the language the message must be written in, not merely what the
+  // history happens to be: when those disagreed (English history, Chinese
+  // draft) the old wording restated the history and the model followed *it*.
+  // Branch on `style.language` itself, never on the display string derived from
+  // it, so rewording a label cannot silently flip which clause is chosen.
+  const hasHistory = style.count > 0;
+  const historyLanguage = style.language === "zh"
+    ? "Chinese"
+    : style.language === "en" ? "English" : null;
+  const styleLines = [
+    // "No history" is a claim about `samples`, so it is gated on `samples`:
+    // `language` is also null for an empty history, but a measured history can
+    // still have no lettered subjects, and calling that "no history" while the
+    // samples are printed below would contradict the same message.
+    hasHistory && historyLanguage
+      ? `Language of recent commit subjects: ${historyLanguage}.`
+      : hasHistory
+        ? "Language of recent commit subjects: not determinable from the samples below."
+        : "Recent commit subjects: none to measure — this repository has no commit history yet.",
+    lang === "zh"
+      ? `Write this message in Simplified Chinese${style.language === "en"
+          ? " even though the history is English; use that history only for structure and subject length."
+          : style.language === "zh" ? ", matching the history." : "."}`
+      : `Write this message in English${style.language === "zh"
+          ? ", even though the history is Chinese."
+          : style.language === "en" ? ", matching the history." : "."}`,
+  ];
   const body = [
-    styleLines.length
-      ? `Recent commit subjects in this repository, for style and language:\n${styleLines.join("\n")}`
+    "Repository commit style",
+    "-----------------------",
+    ...styleLines,
+    `Subject prefix: ${style.conventional
+      ? "recent subjects look like `type(scope): description`; keep that shape."
+      : "recent subjects carry no `type:` prefix; do not add one."}`,
+    style.bodies
+      ? "Recent commits do write bodies; use one when the change needs it."
+      : "Recent commits are usually a single line; add a body only when the change genuinely needs one.",
+    "",
+    "Format the message as:",
+    "  subject",
+    "  <blank line>",
+    "  body, when it helps",
+    "",
+    samples.length
+      ? `Recent commit messages from this repository:\n${samples.map((entry) => entry.subject).join("\n")}`
       : "This repository has no commit history yet.",
     "",
-    `Changes to describe (${scopeLabel}):`,
+    "Change to describe",
+    "------------------",
+    "```diff",
     truncated ? patch.slice(0, MAX_PROMPT_PATCH_CHARS) : patch,
-    truncated ? "\n[diff truncated]" : "",
-  ].join("\n");
+    truncated ? "[diff truncated: describe what is visible here, and nothing you cannot see]" : "",
+    "```",
+  ].filter((line) => line !== "").join("\n");
 
-  return { ok: true, content: body, scope, files };
+  // The prompt describes the scope in prose; the caller gets the structure above
+  // and phrases it in the user's language.
+  return { ok: true, content: body, lang, style, scope, files };
 }
 
-/**
- * The models the host is willing to expose, or a reason it would not.
- *
- * A failure here used to be reported as "no model configured" whoever was at
- * fault — including a permission that was never granted. That told the user to
- * go and add a provider they already had, which is worse than saying nothing.
- * Callers now get the distinction: `code` is the host's own error code.
- */
 async function listModels() {
   let models;
   try {
@@ -497,19 +923,22 @@ async function draftCommitMessage(repo, payload) {
 
   const context = await buildCommitContext(repo, payload);
   if (!context.ok) return context;
+  const system = buildSystemPrompt(context.lang, context.style);
 
   try {
     const result = await pi.agent.complete({
       modelKey: model.key,
-      system: COMMIT_SYSTEM,
+      system,
       messages: [{ role: "user", content: context.content }],
     });
-    const text = tidyCommitMessage(result?.text);
+    // Shaped here, not trusted from the model: see `formatCommitMessage`.
+    const text = formatCommitMessage(result?.text);
     if (!text) return { ok: false, code: "EMPTY_REPLY", message: "The model returned nothing." };
     return {
       ok: true,
       text,
       modelKey: result?.modelKey ?? model.key,
+      lang: context.lang,
       scope: context.scope,
       files: context.files,
     };
@@ -944,13 +1373,17 @@ function cleanRef(raw) {
 }
 
 async function readBranches(repo) {
+  const fields = [
+    "%(refname)",
+    "%(refname:short)",
+    "%(objectname:short)",
+    "%(HEAD)",
+    "%(upstream:short)",
+    "%(committerdate:unix)",
+    "%(contents:subject)",
+  ].join(FS_CHAR);
   const result = await runGit(
-    [
-      "for-each-ref",
-      `--format=%(refname:short)${FS_CHAR}%(objectname:short)${FS_CHAR}%(HEAD)${FS_CHAR}%(upstream:short)${FS_CHAR}%(committerdate:unix)${FS_CHAR}%(contents:subject)`,
-      "refs/heads",
-      "refs/remotes",
-    ],
+    ["for-each-ref", `--format=${fields}`, "refs/heads", "refs/remotes"],
     { cwd: repo.root },
   );
   if (!result.ok) return { ok: false, message: result.message };
@@ -958,20 +1391,24 @@ async function readBranches(repo) {
     .split("\n")
     .filter((line) => line.trim())
     .map((line) => {
-      const [name, short, head, upstream, date, subject] = line.split(FS_CHAR);
+      const [ref, name, short, head, upstream, date, subject] = line.split(FS_CHAR);
       return {
+        ref,
         name,
         short,
         current: head === "*",
         upstream: upstream || null,
         timestamp: Number(date) * 1000,
         subject: subject ?? "",
-        remote: name === "HEAD" || name.includes("/HEAD") || name.includes("/") ,
+        remote: ref.startsWith("refs/remotes/"),
       };
     })
-    // Drop `origin/HEAD` style symbolic rows.
-    .filter((branch) => !branch.name.endsWith("/HEAD"));
-  return { ok: true, branches };
+    // Drop the remote's symbolic HEAD (`refs/remotes/origin/HEAD`). The test
+    // runs on the full refname because `%(refname:short)` shortens that ref to
+    // plain `origin`, which matches no `/HEAD` suffix and used to surface as a
+    // phantom local branch named `origin`.
+    .filter((branch) => !branch.ref.endsWith("/HEAD"));
+  return { ok: true, branches: branches.map(({ ref, ...rest }) => rest) };
 }
 
 async function readStashes(repo) {
@@ -1385,17 +1822,55 @@ async function onPanelInvoke(channel, payload = {}) {
 const OPEN_COMMAND = "pi-idea-git.open";
 const REFRESH_COMMAND = "pi-idea-git.refresh";
 
+/**
+ * The workspace listener is rebuilt on every load and released on unload.
+ *
+ * This host's `pi.events.on` returns nothing (its only `return` is the early
+ * guard for a non-function handler), so the unsubscribe handle cannot be relied
+ * on — `pi.events.off(event, handler)` is the pairing that actually exists, and
+ * it needs the handler reference kept here. A host that does hand back a
+ * function is honoured too, since that removes the need for `off`.
+ */
+let workspaceListenerOff = null;
+let workspaceListenerHandler = null;
+
+function detachWorkspaceListener() {
+  const off = workspaceListenerOff;
+  const handler = workspaceListenerHandler;
+  workspaceListenerOff = null;
+  workspaceListenerHandler = null;
+  try {
+    if (typeof off === "function") off();
+    else if (handler) pi.events?.off?.("workspace:changed", handler);
+  } catch {
+    // The host already tore the listener down.
+  }
+}
+
+/**
+ * Idempotent: a second `onLoad` without an intervening `onUnload` must not stack
+ * a duplicate handler — one is detached before the next is installed.
+ */
+function bindWorkspaceListener() {
+  detachWorkspaceListener();
+  try {
+    const handler = () => {
+      refreshWorkspace().catch(() => {});
+    };
+    const off = pi.events?.on?.("workspace:changed", handler);
+    workspaceListenerHandler = handler;
+    workspaceListenerOff = typeof off === "function" ? off : null;
+  } catch {
+    // Older host without plugin-process events: readRepo still refreshes.
+  }
+}
+
 async function onLoad() {
   // The host re-broadcasts workspace switches to plugin processes; tracking them
   // keeps `workspacePath()` honest for any path that does not go through
   // `readRepo()` (which refreshes on its own).
-  try {
-    pi.events?.on?.("workspace:changed", () => {
-      refreshWorkspace().catch(() => {});
-    });
-  } catch {
-    // Older host without plugin-process events: readRepo still refreshes.
-  }
+  bindWorkspaceListener();
+
 
   await pi.commands.register({
     id: OPEN_COMMAND,
@@ -1422,6 +1897,7 @@ async function onLoad() {
 }
 
 async function onUnload() {
+  detachWorkspaceListener();
   gitBinaryCache = undefined;
   try {
     await pi.commands.unregister(OPEN_COMMAND);

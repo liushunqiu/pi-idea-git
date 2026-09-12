@@ -141,6 +141,26 @@
   }
 }
 
+/* The changes pane's own search box: wide enough to type a path fragment, and
+   it gives the room back to the tree as soon as the pane narrows. */
+.pane-header .search-field {
+  flex: 0 1 150px;
+  min-width: 0;
+}
+
+.pane-header .search-field input.changes-filter {
+  width: 100%;
+  min-width: 0;
+}
+
+@media (max-width: 520px) {
+  /* Keep the gear, drop the field: filtering is a convenience, the view options
+     are not. */
+  .pane-header .search-field {
+    display: none;
+  }
+}
+
 .branch-chip {
   display: inline-flex;
   align-items: center;

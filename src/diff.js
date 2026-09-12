@@ -255,17 +255,33 @@ function markSubmodule(hunk) {
   }
 
   function renderText(text, options) {
-    if (!options?.showWhitespaces && !options?.fragment) return document.createTextNode(text);
+    const fragment = options?.fragment;
+    if (!options?.showWhitespaces && !fragment) return document.createTextNode(text);
 
     const holder = document.createDocumentFragment();
-    const fragment = options?.fragment;
+
+    // Without whitespace markers the fragment highlight needs at most three
+    // nodes. Building one node per character here was what made a large diff
+    // expensive: every changed line turned into thousands of text nodes, and
+    // the whole diff is rebuilt from scratch on each render.
+    if (!options?.showWhitespaces) {
+      const rawStart = Number(fragment.start);
+      const rawEnd = Number(fragment.end);
+      const start = Math.max(0, Math.min(Number.isFinite(rawStart) ? rawStart : 0, text.length));
+      const end = Math.max(start, Math.min(Number.isFinite(rawEnd) ? rawEnd : text.length, text.length));
+      if (start > 0) holder.append(document.createTextNode(text.slice(0, start)));
+      if (end > start) holder.append(h("span", { class: "fragment", text: text.slice(start, end) }));
+      if (end < text.length) holder.append(document.createTextNode(text.slice(end)));
+      return holder;
+    }
+
     for (let index = 0; index < text.length; index += 1) {
       const character = text[index];
-      if (options?.showWhitespaces && character === " ") {
+      if (character === " ") {
         holder.append(h("span", { class: "whitespace-mark", text: "·" }));
         continue;
       }
-      if (options?.showWhitespaces && character === "\t") {
+      if (character === "\t") {
         holder.append(h("span", { class: "whitespace-mark", text: "→" }));
         continue;
       }

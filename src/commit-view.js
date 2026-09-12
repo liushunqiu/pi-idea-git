@@ -45,6 +45,21 @@
     T: "modified", "?": "unversioned", U: "conflict", "!": "ignored",
   };
 
+  /**
+   * Which language a drafted message is written in. A standing choice rather
+   * than something the model infers: an English history used to mean English
+   * drafts, however Chinese the person reading them was.
+   */
+  const LANGUAGES = [
+    { value: "auto", label: "langAuto" },
+    { value: "zh", label: "langChinese" },
+    { value: "en", label: "langEnglish" },
+  ];
+
+  function languageLabel(value) {
+    const option = LANGUAGES.find((row) => row.value === (value ?? "auto")) ?? LANGUAGES[0];
+    return t(option.label);
+  }
   function statusColor(code) {
     const key = STATUS_VARS[String(code ?? "").charAt(0)] ?? "modified";
     return `var(--status-${key})`;
@@ -71,6 +86,80 @@
       return filePath.slice(inner.length + 1);
     }
     return null;
+  }
+
+  // --------------------------------------------------------- change tree ---
+  /**
+   * The change lists arrive flat and repository-relative — the file name, with
+   * its directory demoted to a grey tail the column is usually too narrow to
+   * show. Rebuilding those paths as a tree is what answers "which folder does
+   * this belong to" without the user having to read a path at all.
+   *
+   * The tree is per change list (Staged / Unstaged / Unversioned) rather than
+   * across all of them: one file can sit in two lists at once, and a folder's
+   * checkbox could not then mean one thing.
+   */
+  function buildChangeTree(files) {
+    const root = { name: "", path: "", dirs: new Map(), files: [], total: 0 };
+    for (const file of files ?? []) {
+      const parts = String(file.path ?? "").replace(/\\/g, "/").split("/").filter(Boolean);
+      const name = parts.pop();
+      if (!name) continue;
+      let node = root;
+      let prefix = "";
+      for (const part of parts) {
+        prefix = prefix ? `${prefix}/${part}` : part;
+        let child = node.dirs.get(part);
+        if (!child) {
+          child = { name: part, path: prefix, dirs: new Map(), files: [], total: 0 };
+          node.dirs.set(part, child);
+        }
+        node = child;
+      }
+      node.files.push(file);
+    }
+    annotate(root);
+    return root;
+  }
+
+  /** File totals per subtree, so a folder row can say how much it covers. */
+  function annotate(node) {
+    let total = node.files.length;
+    for (const child of node.dirs.values()) total += annotate(child);
+    node.total = total;
+    return total;
+  }
+
+  /** Every file below a directory, its own first. Drives the cascade. */
+  function filesUnder(node, out = []) {
+    for (const file of node.files) out.push(file);
+    for (const child of node.dirs.values()) filesUnder(child, out);
+    return out;
+  }
+
+  /** Directories before files, both in IDEA's case-insensitive natural order. */
+  function treeEntries(node) {
+    const dirs = [...node.dirs.values()]
+      .sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: "base", numeric: true }))
+      .map((dir) => ({ kind: "dir", dir }));
+    const files = [...node.files]
+      .sort((a, b) => splitPath(a.path).name.localeCompare(splitPath(b.path).name, undefined, { sensitivity: "base", numeric: true }))
+      .map((file) => ({ kind: "file", file }));
+    return [...dirs, ...files];
+  }
+
+  /**
+   * IDEA's "Compact Middle Directories": a chain of folders whose parents hold
+   * nothing else is drawn as one row, `src/main/java` instead of three.
+   */
+  function compactDir(dir, enabled) {
+    let node = dir;
+    let label = dir.name;
+    while (enabled && node.files.length === 0 && node.dirs.size === 1) {
+      [node] = node.dirs.values();
+      label += `/${node.name}`;
+    }
+    return { label, node };
   }
 
   // ------------------------------------------------------------ branches ---
@@ -268,11 +357,18 @@
       amend: false,
       signoff: false,
       messages: [],
+      // Both keyed by group, because collapsing `src/` in Unversioned must not
+      // collapse it in Unstaged too.
       collapsed: new Set(),
       filter: "",
+      // IDEA's view options for the changes tree, persisted with the rest.
+      groupByDirectory: true,
+      compactDirs: true,
       changesWidth: 45,
       generating: false,
       commitModelKey: "",
+      // Empty means `auto`; the plugin resolves it against the repository.
+      commitLang: "",
     };
 
     const branchHolder = h("div", { style: { display: "contents" } });
@@ -353,59 +449,125 @@
       changesHeader.append(h("span", { text: t("changes") }));
       changesHeader.append(h("span", { class: "muted", text: total ? `${total}` : "" }));
       changesHeader.append(h("div", { class: "toolbar-spacer" }));
-      changesHeader.append(iconButton("minus", t("unstageAllChanges"), async () => {
-        const paths = (state.repo?.staged ?? []).map((file) => file.path);
-        if (!paths.length) return;
-        report(await invoke("git/unstage", { paths }), t("unstageAllChanges"));
-        await refresh();
-      }, { size: 13 }));
-      changesHeader.append(iconButton("plus", t("stageAllChanges"), async () => {
-        const paths = [
-          ...(state.repo?.unstaged ?? []).map((file) => file.path),
-          ...(state.repo?.untracked ?? []).map((file) => file.path),
-        ];
-        if (!paths.length) return;
-        report(await invoke("git/stage", { paths }), t("stageAllChanges"));
-        await refresh();
+      // IDEA puts this search in the changes pane's own title bar: typing is how
+      // you find one file among seventy-four, and the tree below narrows to the
+      // matches while keeping their folders.
+      const field = h("input", {
+        type: "search",
+        class: "changes-filter",
+        value: state.filter,
+        placeholder: t("filterChanges"),
+        title: t("filterChanges"),
+        oninput: (event) => { state.filter = event.target.value; paintChanges(); },
+        onkeydown: (event) => {
+          if (event.key !== "Escape" || !state.filter) return;
+          event.stopPropagation();
+          state.filter = "";
+          paintChanges();
+        },
+      });
+      changesHeader.append(h("span", { class: "search-field" }, [icon("search", 12), field]));
+      changesHeader.append(iconButton("gear", t("viewOptions"), (event) => {
+        popup(event.currentTarget, [
+          { type: "label", label: t("viewOptions") },
+          { label: t("groupByDirectory"), checked: state.groupByDirectory, onSelect: () => setViewOption("groupByDirectory", !state.groupByDirectory) },
+          // Only meaningful inside a folder tree.
+          { label: t("compactMiddleDirs"), checked: state.compactDirs, disabled: !state.groupByDirectory, onSelect: () => setViewOption("compactDirs", !state.compactDirs) },
+          { type: "separator" },
+          { label: t("collapseAll"), onSelect: () => { collapseAll(); } },
+          { type: "separator" },
+          { label: t("stageAllChanges"), onSelect: () => setAllInclusion(true) },
+          { label: t("unstageAllChanges"), onSelect: () => setAllInclusion(false) },
+        ]);
       }, { size: 13 }));
     }
 
-    function fileRow(group, file) {
+    function setViewOption(key, value) {
+      state[key] = value;
+      savePrefs();
+      paintChanges();
+    }
+
+    /** Collapse every group and folder — IDEA's "Collapse All". */
+    function collapseAll() {
+      for (const group of GROUPS) state.collapsed.add(group.id);
+      for (const group of GROUPS) {
+        for (const file of state.repo?.[group.id] ?? []) {
+          const parts = file.path.split("/");
+          parts.pop();
+          let prefix = "";
+          for (const part of parts) {
+            prefix = prefix ? `${prefix}/${part}` : part;
+            state.collapsed.add(`dir:${group.id}:${prefix}`);
+          }
+        }
+      }
+      paintChanges();
+    }
+
+    /**
+     * One checkbox for a set of files. Folder rows pass every file beneath them,
+     * which is the cascade: one click includes or excludes a whole subtree.
+     *
+     * Deliberately binary — no tri-state dash. A dash would mean "partially
+     * selected", and that state cannot exist here: a row's group *is* its staged
+     * state (Staged ⇔ in the index), so checking any file moves it to the other
+     * group rather than leaving a half-checked folder behind. Drawing a dash
+     * anyway would be a claim the user could not reconcile with the list. A file
+     * that genuinely is half in the index (`MM`: staged, with further unstaged
+     * changes) says so with a badge on its own row.
+     */
+    function rowCheckbox({ checked, title, onToggle }) {
+      const box = h("input", { type: "checkbox", title, onclick: (event) => event.stopPropagation() });
+      box.checked = checked;
+      box.addEventListener("change", async (event) => {
+        const next = event.target.checked;
+        event.target.disabled = true;
+        try {
+          await onToggle(next);
+        } finally {
+          event.target.disabled = false;
+        }
+      });
+      return box;
+    }
+
+    /**
+     * The checkbox is IDEA's "include into commit", which with a real index
+     * behind it means: selected = staged. Reaching `target` therefore means
+     * staging what is not in the commit yet and unstaging what is in it and
+     * should not be — and leaving alone whatever already matches, because a
+     * no-op `git add` still costs a process.
+     */
+    function applyInclusion(files, target) {
+      const want = target ? "staged" : "worktree";
+      const paths = files.filter((file) => file.state !== want).map((file) => file.path);
+      if (!paths.length) return Promise.resolve();
+      return invoke(target ? "git/stage" : "git/unstage", { paths }).then(async (result) => {
+        if (!result.ok) {
+          toast(PIG.errorText(result), "error");
+          await refresh();
+          return;
+        }
+        // A folder can hold a submodule. Staging one records the commit it
+        // points at and anything dirty inside it stays dirty, so the row comes
+        // back unselected even though the call succeeded. Say which of the two
+        // happened rather than letting the checkbox look broken.
+        const stuck = target ? files.filter((file) => file.insideSubmodule) : [];
+        await refresh();
+        if (!stuck.length) return;
+        const staged = (state.repo?.staged ?? []).map((entry) => entry.path);
+        if (stuck.some((file) => staged.includes(file.path))) toast(t("submoduleStagedHint"), "info");
+        else toast(PIG.tf("submoduleInside", { path: stuck[0].path }), "error");
+      });
+    }
+
+    function fileRow(group, file, depth, fullPath) {
       const selectionKey = `${group}:${file.path}`;
       const selected = state.selection === selectionKey;
-      const { name, directory } = splitPath(file.path);
+      const { name } = splitPath(file.path);
 
-      const checkbox = h("input", {
-        type: "checkbox",
-        title: t("includeIntoCommit"),
-        checked: group === "staged",
-        onclick: (event) => event.stopPropagation(),
-        onchange: async (event) => {
-          const checked = event.target.checked;
-          event.target.disabled = true;
-          const channel = checked ? "git/stage" : "git/unstage";
-          const result = await invoke(channel, { paths: [file.path] });
-          if (!result.ok) {
-            toast(PIG.errorText(result), "error");
-            await refresh();
-            return;
-          }
-          if (!checked || !file.insideSubmodule) {
-            await refresh();
-            return;
-          }
-          // Staging a submodule records which commit it points at; anything
-          // uncommitted inside it stays, so the row comes back unchecked. Say
-          // which of the two happened rather than letting the checkbox look
-          // broken — the first case means nothing at all was staged.
-          const fresh = await refresh();
-          const nowStaged = (fresh.staged ?? []).some((f) => f.path === file.path);
-          if (nowStaged) toast(t("submoduleStagedHint"), "info");
-          else toast(PIG.tf("submoduleInside", { path: file.path }), "error");
-        },
-      });
-
-      const row = h("div", {
+      return h("div", {
         class: "tree-row",
         role: "option",
         tabindex: "0",
@@ -418,29 +580,122 @@
           fileContextMenu(event.currentTarget, group, file);
         },
       }, [
-        h("span", { class: "indent", style: { width: "14px" } }),
-        checkbox,
-        h("span", { class: "status-cell", style: { color: statusColor(file.status) }, text: file.status === "?" ? "?" : file.status }),
+        h("span", { class: "indent", style: { width: `${depth * 12}px` } }),
+        rowCheckbox({
+          checked: group === "staged",
+          title: t("includeIntoCommit"),
+          onToggle: (next) => applyInclusion([file], next),
+        }),
+        // Same slots as a folder row — disclosure, icon — so the two line up and
+        // the status letter sits where a folder's arrow is. Without it every
+        // file name would start to the left of the folder it lives in.
+        h("span", { class: "indent", style: { width: "10px" } }),
+        h("span", { class: "status-cell", style: { color: statusColor(file.status) }, text: file.status }),
+        // The directory is the tree now. Repeating it as a grey tail answered
+        // "which folder" worse than the hierarchy does, and the narrow column
+        // clipped it anyway.
         h("span", { class: "name", style: { color: statusColor(file.status) }, text: name }),
-        directory ? h("span", { class: "path", text: directory }) : null,
+        // No "partly staged" badge. A file with an index change *and* a further
+        // worktree change already says so the only way Git says it: the same
+        // path is listed here and in the other group, each row carrying its own
+        // status letter. Naming that state separately would invent a concept
+        // the user cannot see in `git status` or in any other Git client.
+        // Inside the tree the folders already answered "where is this", so only
+        // the Flat view repeats the path — and there it is essential, because
+        // nothing else identifies the file. The column is narrow, so the tail
+        // ellipsises and the tooltip keeps the whole path readable.
+        fullPath && file.path !== name
+          ? h("span", { class: "path", title: fullPath, text: fullPath })
+          : null,
         // A submodule deserves a visible mark: its checkbox means something
         // different from every other row's.
         file.submodule
-          ? h("span", {
-            class: "badge",
-            text: t("submoduleBadge"),
-            title: submoduleTooltip(file),
-          })
+          ? h("span", { class: "badge", text: t("submoduleBadge"), title: submoduleTooltip(file) })
           : null,
       ]);
-      return row;
     }
+
 
     /** Why a submodule row behaves differently, in the user's language. */
     function submoduleTooltip(file) {
       if (file.insideSubmodule) return PIG.tf("submoduleInside", { path: file.path });
       return t("submoduleStagedHint");
     }
+
+    /**
+     * A folder row: a disclosure arrow, the folder, a count, and a checkbox
+     * that reaches every file below it, nested folders included. Checking it
+     * stages the whole subtree; unchecking it unstages the whole subtree. That
+     * cascade is the interaction a flat list cannot offer.
+     *
+     * The checkbox stays binary, and its meaning is "everything under here is in
+     * the commit": ticked in Staged, cleared in Unstaged. A file that is only
+     * half in the index (`MM`) is flagged by the folder carrying a "partly
+     * staged" badge rather than by a dash on the box — a dash would read as
+     * "some of this folder is selected", which is a state this list cannot
+     * represent, because a row's group *is* its staged state.
+     */
+    function dirRow(group, dir, depth, label) {
+      const files = filesUnder(dir);
+      const total = files.length;
+      const open = !state.collapsed.has(`dir:${group}:${dir.path}`);
+      const action = group === "staged" ? t("unincludeFolder") : t("includeFolder");
+      return h("div", {
+        class: "tree-row dir-row",
+        role: "treeitem",
+        "aria-expanded": open ? "true" : "false",
+        title: dir.path,
+        onclick: () => {
+          const key = `dir:${group}:${dir.path}`;
+          if (state.collapsed.has(key)) state.collapsed.delete(key);
+          else state.collapsed.add(key);
+          paintChanges();
+        },
+      }, [
+        h("span", { class: "indent", style: { width: `${depth * 12}px` } }),
+        rowCheckbox({
+          checked: group === "staged",
+          title: action,
+          onToggle: (next) => applyInclusion(files, next),
+        }),
+        h("span", { class: "disclosure", "data-open": open ? "true" : "false" }, [icon("chevronRight", 11)]),
+        h("span", { class: "row-icon" }, [icon("folder", 13)]),
+        h("span", { class: "name", text: label }),
+        h("span", { class: "count", text: `${total}` }),
+      ]);
+    }
+
+
+    /** Depth-first render of one change list. Returns the rows, so the caller
+        can append them in one pass. */
+    function treeRows(group, node, depth) {
+      const rows = [];
+      for (const entry of treeEntries(node)) {
+        if (entry.kind === "file") {
+          rows.push(fileRow(group, entry.file, depth));
+          continue;
+        }
+        // A compacted row stands for a chain of folders, so it is the deepest
+        // node in that chain that owns the expanded state and the children.
+        const { label, node: target } = compactDir(entry.dir, state.compactDirs);
+        rows.push(dirRow(group, target, depth, label));
+        if (state.collapsed.has(`dir:${group}:${target.path}`)) continue;
+        rows.push(...treeRows(group, target, depth + 1));
+      }
+      return rows;
+    }
+
+    /**
+     * The same change list without its folders: IDEA's Flat view. Files are
+     * listed by full repository path, which is the whole point of leaving the
+     * tree — nothing is identified by position any more.
+     */
+    function flatRows(group, files) {
+      return [...files]
+        .sort((a, b) => a.path.localeCompare(b.path, undefined, { sensitivity: "base", numeric: true }))
+        .map((file) => fileRow(group, file, 0, file.path));
+    }
+
 
     function paintChanges() {
       PIG.clear(changesList);
@@ -454,13 +709,21 @@
       }
 
       const filter = state.filter.trim().toLowerCase();
-      let shown = 0;
+      const matches = (file) => !filter || file.path.toLowerCase().includes(filter);
+      let groups = 0;
 
       for (const group of GROUPS) {
-        const files = (state.repo[group.id] ?? []).filter((file) =>
-          !filter || file.path.toLowerCase().includes(filter));
-        if (!files.length) continue;
-        shown += files.length;
+        const all = (state.repo[group.id] ?? []).map((file) => ({
+          ...file,
+          // Being in the commit is the same question as being in the index, so
+          // the group a row came from is what its checkbox math reads.
+          state: group.id === "staged" ? "staged" : "worktree",
+        }));
+        if (!all.length) continue;
+        const visible = all.filter(matches);
+        if (!visible.length) continue;
+        groups += 1;
+
         const open = !state.collapsed.has(group.id);
         const header = h("div", {
           class: "group-header",
@@ -472,32 +735,36 @@
         }, [
           h("span", { class: "disclosure", "data-open": open ? "true" : "false" }, [icon("chevronRight", 11)]),
           h("span", { text: t(group.label) }),
-          h("span", { class: "count", text: `${files.length}` }),
+          h("span", {
+            class: "count",
+            // While filtering, say both numbers: the folder tree below can only
+            // ever account for the matches, and a lone count would look wrong.
+            text: visible.length === all.length ? `${all.length}` : `${visible.length}/${all.length}`,
+          }),
         ]);
-        if (group.id === "staged" || group.id === "unstaged" || group.id === "untracked") {
+
+        // Conflicts are not something to include or exclude — they have to be
+        // resolved first — so that group gets no checkbox at all.
+        if (group.id !== "conflicted") {
           header.append(h("div", { class: "toolbar-spacer" }));
-          const allStaged = group.id === "staged";
-          header.append(h("button", {
-            class: "tiny-button",
-            type: "button",
-            title: allStaged ? t("unstageAllChanges") : t("stageAllChanges"),
-            onclick: async (event) => {
-              event.stopPropagation();
-              const paths = files.map((file) => file.path);
-              const result = await invoke(allStaged ? "git/unstage" : "git/stage", { paths });
-              if (!result.ok) toast(PIG.errorText(result), "error");
-              await refresh();
-            },
-          }, [icon(allStaged ? "minus" : "plus", 11)]));
+          header.append(rowCheckbox({
+            checked: group.id === "staged",
+            title: group.id === "staged" ? t("unstageAllChanges") : t("stageAllChanges"),
+            onToggle: (next) => applyInclusion(visible, next),
+          }));
         }
         changesList.append(header);
         if (!open) continue;
-        for (const file of files) changesList.append(fileRow(group.id, file));
+        if (!state.groupByDirectory) {
+          for (const row of flatRows(group.id, visible)) changesList.append(row);
+        } else {
+          for (const row of treeRows(group.id, buildChangeTree(visible), 0)) changesList.append(row);
+        }
       }
 
-      if (!shown) {
+      if (!groups) {
         changesList.append(h("div", { class: "empty-state" }, [
-          h("div", { class: "headline", text: t("noChanges") }),
+          h("div", { class: "headline", text: filter ? t("noMatchingChanges") : t("noChanges") }),
         ]));
       }
     }
@@ -647,9 +914,9 @@
       PIG.clear(generateButton);
       generateButton.append(icon("sparkles", 13));
       generateButton.append(h("span", { class: "gen-label", text: busy ? t("generating") : t("generateMessage") }));
-      generateButton.title = PIG.state.locale === "zh-CN"
-        ? `${t("generateMessage")}（未选中文件时使用全部已暂存内容）`
-        : `${t("generateMessage")} (uses everything staged when no file is selected)`;
+      generateButton.title = `${t("generateMessage")} · ${languageLabel()}${PIG.state.locale === "zh-CN"
+        ? "（未选中文件时使用全部已暂存内容）"
+        : " (uses everything staged when no file is selected)"}`;
     }
 
     /**
@@ -685,6 +952,11 @@
       const target = draftTarget();
       const payload = target ? { path: target.path, mode: target.mode } : {};
       if (state.commitModelKey) payload.modelKey = state.commitModelKey;
+      // The plugin process has no idea which language this window speaks, so it
+      // travels with the request: `commitLang` is the user's standing choice,
+      // `locale` the fallback for a repository with no history to follow.
+      payload.lang = state.commitLang;
+      payload.locale = PIG.state.locale;
 
       // Never silently discard something the user typed.
       if (state.message.trim()) {
@@ -754,6 +1026,26 @@
             },
           });
         }
+      }
+
+      // The language is a choice, not a guess — the reason this menu exists is
+      // that the model used to answer an English repository in English however
+      // Chinese the user was. `auto` follows the history, which is what the
+      // prompt was always trying to do, and falls back to the interface.
+      items.push(
+        { type: "separator" },
+        { type: "label", label: t("commitLanguage") },
+      );
+      for (const option of LANGUAGES) {
+        items.push({
+          label: t(option.label),
+          checked: state.commitLang === option.value,
+          onSelect: () => {
+            state.commitLang = option.value;
+            savePrefs();
+            paintGenerate();
+          },
+        });
       }
       popup(anchor, items);
     }
@@ -1006,7 +1298,10 @@
           commitUnified: state.diffUnified,
           showWhitespaces: state.showWhitespaces,
           showLineNumbers: state.showLineNumbers,
+          commitLang: state.commitLang,
           commitModelKey: state.commitModelKey,
+          groupByDirectory: state.groupByDirectory,
+          compactDirs: state.compactDirs,
         },
       }).catch(() => {});
     }
@@ -1078,7 +1373,10 @@
       if (typeof ui.commitUnified === "boolean") state.diffUnified = ui.commitUnified;
       if (typeof ui.showWhitespaces === "boolean") state.showWhitespaces = ui.showWhitespaces;
       if (typeof ui.showLineNumbers === "boolean") state.showLineNumbers = ui.showLineNumbers;
+      if (typeof ui.commitLang === "string") state.commitLang = ui.commitLang;
       if (typeof ui.commitModelKey === "string") state.commitModelKey = ui.commitModelKey;
+      if (typeof ui.groupByDirectory === "boolean") state.groupByDirectory = ui.groupByDirectory;
+      if (typeof ui.compactDirs === "boolean") state.compactDirs = ui.compactDirs;
     }
 
     (async () => {

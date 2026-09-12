@@ -151,6 +151,10 @@
       generating: "Generating…",
       generateOptions: "Model and options",
       modelLabel: "Model",
+      commitLanguage: "Message language",
+      langAuto: "Match repository history",
+      langChinese: "Simplified Chinese",
+      langEnglish: "English",
       noModel: "No AI provider is ready to use. Add one, or sign one in, under Settings → AI providers.",
       modelPermission: "The plugin has not been granted access to your models yet, so it cannot list them. Reload it: Extensions → ··· → Load local plugin, and approve the new permissions.",
       modelPermissionShort: "Cannot list your models — reload to grant access",
@@ -167,6 +171,12 @@
       submoduleStagedHint: "Staged the submodule's commit. Its own uncommitted changes stay inside it and still show as unstaged.",
       appShortcutHint: "The command palette belongs to the app: click back into the main window first, or press Alt+Space for the plugin launcher.",
       dropStashConfirm: "Drop this stash?",
+      noMatchingChanges: "No changes match the filter",
+      filterChanges: "Filter changes",
+      compactMiddleDirs: "Compact Middle Directories",
+      collapseAll: "Collapse All",
+      includeFolder: "Include this folder into commit",
+      unincludeFolder: "Exclude this folder from commit",
       repositoryHint: "Open a folder that is inside a Git repository.",
     },
     "zh-CN": {
@@ -305,6 +315,10 @@
       generating: "生成中…",
       generateOptions: "模型与选项",
       modelLabel: "模型",
+      commitLanguage: "提交信息语言",
+      langAuto: "跟随仓库历史",
+      langChinese: "简体中文",
+      langEnglish: "英文",
       noModel: "没有可用的 AI 服务：请先在「设置 → AI 服务」中添加或登录一个。",
       modelPermission: "插件还没有拿到读取模型的权限，因此列不出模型。请重新加载：扩展页 → 右上角 ··· → 「加载本地插件」，并同意新增的权限。",
       modelPermissionShort: "无法列出模型 — 需重新加载以授权",
@@ -322,6 +336,12 @@
       appShortcutHint: "命令面板由宿主提供，需先点回主窗口；或在视图内按 Alt+Space 打开插件启动器。",
       diff: "差异",
       dropStashConfirm: "删除该储藏？",
+      noMatchingChanges: "没有匹配的变更",
+      filterChanges: "筛选变更",
+      includeFolder: "把该文件夹纳入本次提交",
+      unincludeFolder: "把该文件夹排除出本次提交",
+      compactMiddleDirs: "折叠中间目录",
+      collapseAll: "全部折叠",
       repositoryHint: "请打开一个位于 Git 仓库内的文件夹。",
     },
   };
@@ -861,12 +881,34 @@
    * exactly the bug this exists to prevent.
    */
   function watchWorkspace(handler) {
-    bridge?.on?.("workspace:changed", () => {
+    // `workspace:changed` can arrive in bursts (the host announces a project
+    // switch as it settles), and each run costs a multi-process git refresh.
+    // Run at most once per window, so the cost tracks elapsed time rather than
+    // event count. The first event of a quiet period runs immediately — a switch
+    // must not wait out a debounce while the view is still interactive — and a
+    // burst collapses into a single catch-up run that renders the final state.
+    const COALESCE_MS = 120;
+    let lastRunAt = 0;
+    let timer = null;
+    const fire = () => {
+      lastRunAt = Date.now();
       try {
         handler();
       } catch {
         // A failed reload must not take the view down with it.
       }
+    };
+    bridge?.on?.("workspace:changed", () => {
+      if (timer !== null) return; // a catch-up run is already pending
+      const since = Date.now() - lastRunAt;
+      if (since >= COALESCE_MS) {
+        fire();
+        return;
+      }
+      timer = window.setTimeout(() => {
+        timer = null;
+        fire();
+      }, COALESCE_MS - since);
     });
   }
 

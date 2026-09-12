@@ -145,6 +145,15 @@
     });
   }
 
+  /**
+   * Only one diff overlay may be open at a time. Every `openDiffOverlay` call
+   * used to append another `position: absolute; inset: 0` layer to <body>, and
+   * each layer carried a full diff worth of DOM — so the cost of opening the
+   * next one grew with the number already left open, which is the shape a
+   * steadily climbing renderer CPU takes.
+   */
+  let activeDiffOverlay = null;
+
   /** Diff overlay: the stand-in for IDEA's "diff opens in the editor". */
   /**
    * A commit's diff, in IDEA's shape: a header naming the file, the view
@@ -152,12 +161,17 @@
    * because there is no editor tab to open it into.
    */
   function openDiffOverlay(title, text, repo) {
+    // Disposing the previous overlay also drops its keydown listener; leaving
+    // it behind would leak one document-level handler per opened diff.
+    if (activeDiffOverlay) activeDiffOverlay();
+
     const view = { unified: true, showWhitespaces: false, showLineNumbers: true };
     const body = h("div", { class: "diff" });
     const header = h("div", { class: "toolbar diff-overlay-header" });
     const overlay = h("div", { class: "diff-overlay", role: "dialog", "aria-label": title });
 
     const close = () => {
+      if (activeDiffOverlay === close) activeDiffOverlay = null;
       overlay.remove();
       document.removeEventListener("keydown", onKey, true);
     };
@@ -208,6 +222,7 @@
     paintHeader();
     paintDiff();
     document.addEventListener("keydown", onKey, true);
+    activeDiffOverlay = close;
   }
 
   function mountLog(root) {

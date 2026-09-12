@@ -25,7 +25,9 @@ workflow.
 
 | Feature | Where | Notes |
 | --- | --- | --- |
-| `Staged` / `Unstaged` / `Unversioned Files` / `Merge Conflicts` | Commit → Changes area | Checkbox per file. Checking an unstaged file stages it; unchecking a staged file unstages it — IDEA's "include in this commit" mapped onto a real index |
+| `Staged` / `Unstaged` / `Unversioned Files` / `Merge Conflicts` | Commit → Changes area | Grouped as a **directory tree**, so every file sits under the folder it belongs to. A folder's checkbox cascades: checking it stages every file below it (nested folders included), unchecking it unstages the whole subtree. A file with both staged and unstaged changes shows up in both groups, as Git itself reports it |
+| View options (gear) | Commit → Changes header | `Group by Directory` ⇄ flat, `Compact Middle Directories` (`src/views/app` as one row), `Collapse All`, and the two "everything in / out of the index" actions. Both view options persist |
+| Filter changes | Commit → Changes header | Narrows the tree to matching files while keeping their ancestor folders, and the group header says `matched/total`. `Esc` clears it |
 | `Commit Message` + `Commit message history` | Commit → bottom | The clock button replays earlier messages, newest first, persisted across restarts |
 | `Generate Commit Message` | Commit → bottom | Drafts the message with the host's own model. Describes the selected file, or everything staged when nothing is selected; the chevron picks which model |
 | `Amend`, `Sign-off commit` | Commit → bottom | `--amend`, `--signoff` |
@@ -133,10 +135,48 @@ The sparkles button next to the summary drafts the message for you. It asks the
 model and quota you already have configured — the plugin holds no API key and
 adds no account.
 
-What it sends is the change itself plus a sample of the repository's recent
-commit subjects, so the draft matches the project's own tone and language
-rather than an invented one. The diff is capped at 12 000 characters: it is a
+What it sends is three things: the change itself, a sample of the repository's
+recent **subjects with their bodies**, and what that sample measures — the
+language it commits in, whether subjects carry a `type(scope):` prefix, and
+whether anyone writes a body. The diff is capped at 12 000 characters: it is a
 prompt, not a backup.
+
+**Language.** The chevron menu next to the sparkles button sets it, because
+"write what the repository writes" is not a language policy: an English history
+produced English drafts however Chinese the reader was. The options are
+**Match repository history** (the default: the measured language, falling back
+to the interface language for a repository with no history), **Simplified
+Chinese** and **English**. Either way the `type` and `scope` stay ASCII, as the
+Conventional Commits translations keep them — `feat(登录): 支持短信验证码`.
+
+The prompt states the hard rules a draft has to satisfy against Git's own
+conventions (git-commit(1), Tim Pope, Chris Beams, Conventional Commits 1.0.0):
+a blank line after the subject, 50 characters with 72 as the ceiling — about 25
+Chinese characters, since a CJK glyph is roughly twice the width — no trailing
+full stop, imperative English subjects, a body that says *why* instead of
+re-listing the diff, and `BREAKING CHANGE:` as the only trailer it may add on
+its own.
+
+**The shape is enforced, not requested.** A prompt cannot be the last line of
+defence for formatting, because the failure that matters is invisible to the
+person writing the prompt: Git treats *every line up to the first blank line* as
+the title, so a reply that puts the body directly under the subject has no body
+at all — it is one enormous subject, which is exactly what a reader calls "not a
+proper commit message". So the reply is run through `formatCommitMessage` before
+it reaches the message field, which:
+
+- guarantees the subject is a single line, with exactly one blank line after it
+  whatever the model did;
+- moves an over-long subject's tail into the body at a clause boundary instead of
+  truncating it, so nothing the model read in the diff is lost;
+- wraps the body to Git's 72 columns, measuring CJK glyphs as two columns the way
+  a terminal does;
+- turns semicolon-joined clauses into one bullet per idea;
+- normalises `,` and `;` to `，` and `；` when they sit between Chinese
+  characters — and leaves ASCII alone, so `feat(a,b): …` survives untouched.
+
+It rewrites no wording, and it is idempotent: a draft that already has the right
+shape passes through unchanged.
 
 **Scope.** With a file selected in the Changes list it describes *that file*;
 with nothing selected it describes *everything staged*. Which one it used is
