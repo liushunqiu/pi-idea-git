@@ -216,7 +216,15 @@
        pushDialogSubtitle: "Push each repository's commits to its own remote.",
        pushAll: "Push All",
        pushSelected: "Push Selected",
-       pushing: "Pushing…",
+      pushing: "Pushing…",
+      committing: "Committing…",
+      committingAndPushing: "Committing and pushing…",
+      fetching: "Fetching…",
+      pulling: "Pulling…",
+      checkingOut: "Checking out…",
+      stashing: "Stashing…",
+      unstashing: "Restoring stash…",
+      pushingRepo: "Pushing {{done}} of {{total}}…",
        pushed: "Pushed",
        pushedRepos: "Pushed {{count}} repositories",
        pushPartial: "Pushed {{ok}} of {{total}} repositories",
@@ -430,6 +438,14 @@
       pushAll: "全部推送",
       pushSelected: "推送所选",
       pushing: "推送中…",
+      committing: "提交中…",
+      committingAndPushing: "提交并推送中…",
+      fetching: "抓取中…",
+      pulling: "拉取中…",
+      checkingOut: "检出中…",
+      stashing: "储藏中…",
+      unstashing: "正在恢复储藏…",
+      pushingRepo: "正在推送 {{done}} / {{total}}…",
       pushed: "已推送",
       pushedRepos: "已推送 {{count}} 个仓库",
       pushPartial: "已推送 {{ok}} / {{total}} 个仓库",
@@ -724,6 +740,105 @@
     toastLayer.append(node);
     window.setTimeout(() => node.remove(), important ? 12_000 : 3600);
     return node;
+  }
+
+  // -------------------------------------------------- busy & progress ----
+  // Long Git operations must never look ignored while the process runs.
+  // Two complementary affordances: the clicked button spins in place
+  // (setButtonBusy), and menu actions with no button to spin get a floating
+  // pill (taskPill / runWithPill). Both are shared so the two tool windows
+  // cannot disagree about what "working" looks like.
+  // Note: 远端操作忙碌反馈的完整取舍见 .agents/notes/implemented/architecture/2026-09-12-remote-action-busy-feedback.md
+  /** A CSS-only spinner; `large` marks primary text buttons. */
+  function spinner(large) {
+    return h("span", { class: large ? "spinner large" : "spinner", "aria-hidden": "true" });
+  }
+
+  // Original children of busy buttons, so the label (and icon) can be
+  // restored exactly rather than rebuilt from a string.
+  const busyOriginals = new WeakMap();
+
+  /**
+   * Spin a button in place. `busyText` null keeps icon-only buttons compact
+   * (spinner alone); text buttons show spinner + text. Always restores the
+   * exact original children via withBusy's finally — never call setButtonBusy
+   * without pairing busy(true)/busy(false).
+   */
+  function setButtonBusy(button, busy, busyText) {
+    if (!button) return;
+    if (busy) {
+      if (button.classList.contains("busy")) return;
+      busyOriginals.set(button, [...button.childNodes]);
+      button.classList.add("busy");
+      button.disabled = true;
+      clear(button);
+      button.append(spinner(busyText ? true : false));
+      if (busyText) button.append(h("span", { text: busyText }));
+    } else {
+      if (!button.classList.contains("busy")) return;
+      button.classList.remove("busy");
+      button.disabled = false;
+      clear(button);
+      for (const node of busyOriginals.get(button) ?? []) button.append(node);
+      busyOriginals.delete(button);
+    }
+  }
+
+  /**
+   * Run `task` with `button` spinning; the button is restored even when the
+   * task throws, and the task's value passes through untouched.
+   */
+  async function withBusy(button, busyText, task) {
+    setButtonBusy(button, true, busyText);
+    try {
+      return await task();
+    } finally {
+      setButtonBusy(button, false);
+    }
+  }
+
+  let taskPillLayer = null;
+
+  /**
+   * A floating "working…" pill for actions with no button to spin in (branch
+   * menu fetch / pull / push / checkout …). Returns `{ update, done }`:
+   * `done(ok)` flashes the outcome briefly, then removes the pill.
+   */
+  function taskPill(label) {
+    if (!taskPillLayer) {
+      taskPillLayer = h("div", { class: "task-pill-layer", "aria-live": "polite" });
+      document.body.append(taskPillLayer);
+    }
+    const labelNode = h("span", { text: String(label ?? "") });
+    const node = h("div", { class: "task-pill", role: "status" }, [spinner(false), labelNode]);
+    taskPillLayer.append(node);
+    let settled = false;
+    return {
+      node,
+      update(next) { labelNode.textContent = String(next ?? ""); },
+      done(ok) {
+        if (settled) return;
+        settled = true;
+        node.classList.add(ok === false ? "failed" : "done");
+        window.setTimeout(() => node.remove(), ok === false ? 2400 : 1200);
+      },
+    };
+  }
+
+  /**
+   * Run `task` behind a pill. The pill always resolves (success flashes and
+   * goes, failure lingers briefly); the task's value passes through.
+   */
+  async function runWithPill(label, task) {
+    const pill = taskPill(label);
+    try {
+      const result = await task();
+      pill.done(result?.ok !== false);
+      return result;
+    } catch (error) {
+      pill.done(false);
+      throw error;
+    }
   }
 
   // -------------------------------------------------------------- popups ---
@@ -1021,6 +1136,19 @@
       const hint = h("div", { class: "muted", style: { fontSize: "11px" }, text: t("pushDialogHint") });
       const pushButton = h("button", { class: "primary", type: "button" }, [t("pushAll")]);
       const closeButton = h("button", { class: "bordered", type: "button" }, [t("close")]);
+      const progressFill = h("div", { class: "push-progress-fill" });
+      const progressTrack = h("div", { class: "push-progress", style: { display: "none" } }, [progressFill]);
+      // Which row is on the wire right now, and how far through the batch it
+      // is — the row pulses while its push runs, the track fills per repo.
+      let activeRoot = null;
+      let doneCount = 0;
+      let totalCount = 0;
+      function paintProgress() {
+        progressTrack.style.display = pushing && totalCount > 1 ? "" : "none";
+        progressFill.style.width = totalCount ? `${Math.round((doneCount / totalCount) * 100)}%` : "0";
+        const label = pushButton.querySelector("span:last-child");
+        if (pushing && label) label.textContent = tf("pushingRepo", { done: Math.min(doneCount + 1, totalCount), total: totalCount });
+      }
       let pushing = false;
       let pushedAny = false;
       const close = (value) => {
@@ -1060,7 +1188,15 @@
           box.addEventListener("change", () => { checked.set(entry.root, box.checked); });
           const label = entry.rel === "." ? entry.name : entry.rel;
           const kind = entry.kind === "submodule" ? t("submoduleBadge") : entry.kind === "sibling" ? t("siblingRepoBadge") : entry.kind === "root" ? "" : t("nestedRepoBadge");
-          const row = h("div", { class: "push-row", style: { display: "flex", gap: "8px", alignItems: "flex-start", padding: "6px 8px", border: "1px solid var(--border)", borderRadius: "6px" } }, [
+          const active = pushing && activeRoot === entry.root && outcome === null;
+          const status = active
+            ? h("div", { class: "row-status pushing" }, [spinner(false), h("span", { text: t("pushing") })])
+            : outcome
+              ? outcome.ok
+                ? h("div", { class: "row-status ok" }, [icon("check", 12), h("span", { text: t("pushed") })])
+                : h("div", { class: "row-status error", text: errorText(outcome) })
+              : null;
+          const row = h("div", { class: `push-row${active ? " is-active" : ""}`, style: { display: "flex", gap: "8px", alignItems: "flex-start", padding: "6px 8px", border: "1px solid var(--border)", borderRadius: "6px" } }, [
             box,
             h("div", { style: { flex: "1 1 auto", minWidth: "0" } }, [
               h("div", { style: { display: "flex", gap: "6px", alignItems: "center" } }, [
@@ -1070,7 +1206,7 @@
               ]),
               h("div", { class: "muted", style: { fontSize: "11px" }, text: branchText(entry) }),
               entry.pushError && !entry.pushTarget ? h("div", { style: { fontSize: "11px", color: "var(--status-conflict)" }, text: entry.pushError }) : null,
-              outcome ? h("div", { style: { fontSize: "11px", color: outcome.ok ? "var(--status-ok)" : "var(--status-conflict)" }, text: outcome.ok ? t("pushed") : errorText(outcome) }) : null,
+              status,
             ]),
           ]);
           rowsHost.append(row);
@@ -1084,16 +1220,21 @@
           return;
         }
         pushing = true;
-        pushButton.disabled = true;
-        pushButton.textContent = t("pushing");
+        closeButton.disabled = true;
+        activeRoot = null;
+        doneCount = 0;
+        totalCount = targets.length;
+        // Single-repo pushes read better as a plain "Pushing…"; the per-row
+        // spinner already says which repo, and a 0%-of-1 bar adds nothing.
+        setButtonBusy(pushButton, true, totalCount > 1 ? tf("pushingRepo", { done: 1, total: totalCount }) : t("pushing"));
+        paintProgress();
         paintRows();
         for (const entry of targets) {
+          activeRoot = entry.root;
           outcomes.set(entry.root, null);
+          paintProgress();
           paintRows();
-          const payload = {};
-          // The active repo needs no override; every other row pushes by path.
-          if (!entry.active) payload.repoRoot = entry.root;
-          else payload.repoRoot = entry.root;
+          const payload = { repoRoot: entry.root };
           if (!entry.branch?.upstream) payload.setUpstream = true;
           let result = null;
           try {
@@ -1106,11 +1247,15 @@
             pushedAny = true;
             try { await refreshTrackingRefs(result); } catch { /* keep pushing */ }
           }
+          doneCount += 1;
+          paintProgress();
           paintRows();
         }
+        activeRoot = null;
         pushing = false;
-        pushButton.disabled = false;
-        pushButton.textContent = t("pushAll");
+        setButtonBusy(pushButton, false);
+        closeButton.disabled = false;
+        paintProgress();
         paintRows();
         try { await options.onPushed?.([...outcomes.values()]); } catch { /* view refreshes anyway */ }
       };
@@ -1123,6 +1268,7 @@
       }, [
         h("div", { style: { fontWeight: "600", marginBottom: "2px" }, text: t("pushDialogTitle") }),
         h("div", { class: "muted", style: { fontSize: "11px" }, text: t("pushDialogSubtitle") }),
+        progressTrack,
         rowsHost,
         hint,
         h("div", { style: { display: "flex", justifyContent: "flex-end", gap: "8px", marginTop: "14px" } }, [
@@ -1447,6 +1593,11 @@
     reportSync,
     refreshTrackingRefs,
     appShortcutHintBinding,
+    spinner,
+    setButtonBusy,
+    withBusy,
+    taskPill,
+    runWithPill,
     // Shared by both tool windows, so the two cannot disagree about which
     // repository they are showing — the same reason the branch chip is shared.
     repoSelector: { mount: mountRepoSelector },

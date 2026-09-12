@@ -1330,6 +1330,130 @@ textarea {
 .diff-sbs .diff-line .num {
   width: 34px;
 }
+/* ------------------------------------------------- busy & progress ---- */
+/* Long Git operations (push / fetch / pull / commit / checkout) must never */
+/* look ignored while the process runs: every trigger shows a spinner where */
+/* it was clicked, plus a floating pill so menu actions have feedback too. */
+.spinner {
+  flex: 0 0 auto;
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  border: 1.5px solid currentColor;
+  border-top-color: transparent;
+  opacity: 0.85;
+  animation: pig-spin 0.7s linear infinite;
+}
+.spinner.large {
+  width: 14px;
+  height: 14px;
+  border-width: 2px;
+}
+@keyframes pig-spin {
+  to { transform: rotate(360deg); }
+}
+/* An icon button that is running something: keep its size so the toolbar */
+/* does not jump, spin the mark in place. */
+button.icon.busy {
+  color: var(--fg-secondary);
+  cursor: wait;
+}
+button.icon.busy svg {
+  display: none;
+}
+button.icon.busy .spinner {
+  display: block;
+  margin: 2px;
+}
+/* Text buttons keep their width while busy so the dialog footer stays put. */
+button.busy {
+  cursor: wait;
+}
+button.busy .spinner {
+  margin-right: 6px;
+  vertical-align: -1px;
+}
+/* One floating pill for actions with no button to spin in (branch-menu */
+/* fetch / pull / push / checkout, stash pop): top-centre, above popups, */
+/* below modal dialogs. */
+.task-pill-layer {
+  position: fixed;
+  top: 10px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 70;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  align-items: center;
+  pointer-events: none;
+}
+.task-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  max-width: min(420px, 90vw);
+  padding: 6px 12px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--panel-bg);
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.28);
+  color: var(--fg-secondary);
+  font-size: 12px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  animation: task-pill-in 160ms ease-out;
+}
+.task-pill.done {
+  color: var(--status-added);
+}
+.task-pill.failed {
+  color: var(--status-conflict);
+}
+@keyframes task-pill-in {
+  from { opacity: 0; transform: translateY(-6px); }
+}
+/* Push dialog: thin progress track under the subtitle plus a per-row state. */
+.push-progress {
+  height: 3px;
+  margin-top: 8px;
+  border-radius: 2px;
+  background: var(--border-soft);
+  overflow: hidden;
+}
+.push-progress-fill {
+  height: 100%;
+  width: 0;
+  border-radius: 2px;
+  background: var(--button-primary-bg);
+  transition: width 180ms ease-out;
+}
+.push-row.is-active {
+  border-color: var(--button-primary-bg);
+  background: var(--diff-modified);
+}
+.push-row .row-status {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+}
+.push-row .row-status.pushing {
+  color: var(--fg-secondary);
+}
+.push-row .row-status.ok {
+  color: var(--status-added);
+}
+.push-row .row-status.error {
+  color: var(--status-conflict);
+}
+/* A slow reload reads as loading, not frozen: dim the list a touch. */
+.is-refreshing .scroll.list,
+.is-refreshing .commits-pane {
+  opacity: 0.65;
+  transition: opacity 120ms ease-out;
+}
 
 /* ---- src/layout.css ---- */
 /*
@@ -1802,7 +1926,15 @@ window.__PI_IDEA_GIT_SURFACE__ = "git";
        pushDialogSubtitle: "Push each repository's commits to its own remote.",
        pushAll: "Push All",
        pushSelected: "Push Selected",
-       pushing: "Pushing…",
+      pushing: "Pushing…",
+      committing: "Committing…",
+      committingAndPushing: "Committing and pushing…",
+      fetching: "Fetching…",
+      pulling: "Pulling…",
+      checkingOut: "Checking out…",
+      stashing: "Stashing…",
+      unstashing: "Restoring stash…",
+      pushingRepo: "Pushing {{done}} of {{total}}…",
        pushed: "Pushed",
        pushedRepos: "Pushed {{count}} repositories",
        pushPartial: "Pushed {{ok}} of {{total}} repositories",
@@ -2016,6 +2148,14 @@ window.__PI_IDEA_GIT_SURFACE__ = "git";
       pushAll: "全部推送",
       pushSelected: "推送所选",
       pushing: "推送中…",
+      committing: "提交中…",
+      committingAndPushing: "提交并推送中…",
+      fetching: "抓取中…",
+      pulling: "拉取中…",
+      checkingOut: "检出中…",
+      stashing: "储藏中…",
+      unstashing: "正在恢复储藏…",
+      pushingRepo: "正在推送 {{done}} / {{total}}…",
       pushed: "已推送",
       pushedRepos: "已推送 {{count}} 个仓库",
       pushPartial: "已推送 {{ok}} / {{total}} 个仓库",
@@ -2310,6 +2450,105 @@ window.__PI_IDEA_GIT_SURFACE__ = "git";
     toastLayer.append(node);
     window.setTimeout(() => node.remove(), important ? 12_000 : 3600);
     return node;
+  }
+
+  // -------------------------------------------------- busy & progress ----
+  // Long Git operations must never look ignored while the process runs.
+  // Two complementary affordances: the clicked button spins in place
+  // (setButtonBusy), and menu actions with no button to spin get a floating
+  // pill (taskPill / runWithPill). Both are shared so the two tool windows
+  // cannot disagree about what "working" looks like.
+  // Note: 远端操作忙碌反馈的完整取舍见 .agents/notes/implemented/architecture/2026-09-12-remote-action-busy-feedback.md
+  /** A CSS-only spinner; `large` marks primary text buttons. */
+  function spinner(large) {
+    return h("span", { class: large ? "spinner large" : "spinner", "aria-hidden": "true" });
+  }
+
+  // Original children of busy buttons, so the label (and icon) can be
+  // restored exactly rather than rebuilt from a string.
+  const busyOriginals = new WeakMap();
+
+  /**
+   * Spin a button in place. `busyText` null keeps icon-only buttons compact
+   * (spinner alone); text buttons show spinner + text. Always restores the
+   * exact original children via withBusy's finally — never call setButtonBusy
+   * without pairing busy(true)/busy(false).
+   */
+  function setButtonBusy(button, busy, busyText) {
+    if (!button) return;
+    if (busy) {
+      if (button.classList.contains("busy")) return;
+      busyOriginals.set(button, [...button.childNodes]);
+      button.classList.add("busy");
+      button.disabled = true;
+      clear(button);
+      button.append(spinner(busyText ? true : false));
+      if (busyText) button.append(h("span", { text: busyText }));
+    } else {
+      if (!button.classList.contains("busy")) return;
+      button.classList.remove("busy");
+      button.disabled = false;
+      clear(button);
+      for (const node of busyOriginals.get(button) ?? []) button.append(node);
+      busyOriginals.delete(button);
+    }
+  }
+
+  /**
+   * Run `task` with `button` spinning; the button is restored even when the
+   * task throws, and the task's value passes through untouched.
+   */
+  async function withBusy(button, busyText, task) {
+    setButtonBusy(button, true, busyText);
+    try {
+      return await task();
+    } finally {
+      setButtonBusy(button, false);
+    }
+  }
+
+  let taskPillLayer = null;
+
+  /**
+   * A floating "working…" pill for actions with no button to spin in (branch
+   * menu fetch / pull / push / checkout …). Returns `{ update, done }`:
+   * `done(ok)` flashes the outcome briefly, then removes the pill.
+   */
+  function taskPill(label) {
+    if (!taskPillLayer) {
+      taskPillLayer = h("div", { class: "task-pill-layer", "aria-live": "polite" });
+      document.body.append(taskPillLayer);
+    }
+    const labelNode = h("span", { text: String(label ?? "") });
+    const node = h("div", { class: "task-pill", role: "status" }, [spinner(false), labelNode]);
+    taskPillLayer.append(node);
+    let settled = false;
+    return {
+      node,
+      update(next) { labelNode.textContent = String(next ?? ""); },
+      done(ok) {
+        if (settled) return;
+        settled = true;
+        node.classList.add(ok === false ? "failed" : "done");
+        window.setTimeout(() => node.remove(), ok === false ? 2400 : 1200);
+      },
+    };
+  }
+
+  /**
+   * Run `task` behind a pill. The pill always resolves (success flashes and
+   * goes, failure lingers briefly); the task's value passes through.
+   */
+  async function runWithPill(label, task) {
+    const pill = taskPill(label);
+    try {
+      const result = await task();
+      pill.done(result?.ok !== false);
+      return result;
+    } catch (error) {
+      pill.done(false);
+      throw error;
+    }
   }
 
   // -------------------------------------------------------------- popups ---
@@ -2607,6 +2846,19 @@ window.__PI_IDEA_GIT_SURFACE__ = "git";
       const hint = h("div", { class: "muted", style: { fontSize: "11px" }, text: t("pushDialogHint") });
       const pushButton = h("button", { class: "primary", type: "button" }, [t("pushAll")]);
       const closeButton = h("button", { class: "bordered", type: "button" }, [t("close")]);
+      const progressFill = h("div", { class: "push-progress-fill" });
+      const progressTrack = h("div", { class: "push-progress", style: { display: "none" } }, [progressFill]);
+      // Which row is on the wire right now, and how far through the batch it
+      // is — the row pulses while its push runs, the track fills per repo.
+      let activeRoot = null;
+      let doneCount = 0;
+      let totalCount = 0;
+      function paintProgress() {
+        progressTrack.style.display = pushing && totalCount > 1 ? "" : "none";
+        progressFill.style.width = totalCount ? `${Math.round((doneCount / totalCount) * 100)}%` : "0";
+        const label = pushButton.querySelector("span:last-child");
+        if (pushing && label) label.textContent = tf("pushingRepo", { done: Math.min(doneCount + 1, totalCount), total: totalCount });
+      }
       let pushing = false;
       let pushedAny = false;
       const close = (value) => {
@@ -2646,7 +2898,15 @@ window.__PI_IDEA_GIT_SURFACE__ = "git";
           box.addEventListener("change", () => { checked.set(entry.root, box.checked); });
           const label = entry.rel === "." ? entry.name : entry.rel;
           const kind = entry.kind === "submodule" ? t("submoduleBadge") : entry.kind === "sibling" ? t("siblingRepoBadge") : entry.kind === "root" ? "" : t("nestedRepoBadge");
-          const row = h("div", { class: "push-row", style: { display: "flex", gap: "8px", alignItems: "flex-start", padding: "6px 8px", border: "1px solid var(--border)", borderRadius: "6px" } }, [
+          const active = pushing && activeRoot === entry.root && outcome === null;
+          const status = active
+            ? h("div", { class: "row-status pushing" }, [spinner(false), h("span", { text: t("pushing") })])
+            : outcome
+              ? outcome.ok
+                ? h("div", { class: "row-status ok" }, [icon("check", 12), h("span", { text: t("pushed") })])
+                : h("div", { class: "row-status error", text: errorText(outcome) })
+              : null;
+          const row = h("div", { class: `push-row${active ? " is-active" : ""}`, style: { display: "flex", gap: "8px", alignItems: "flex-start", padding: "6px 8px", border: "1px solid var(--border)", borderRadius: "6px" } }, [
             box,
             h("div", { style: { flex: "1 1 auto", minWidth: "0" } }, [
               h("div", { style: { display: "flex", gap: "6px", alignItems: "center" } }, [
@@ -2656,7 +2916,7 @@ window.__PI_IDEA_GIT_SURFACE__ = "git";
               ]),
               h("div", { class: "muted", style: { fontSize: "11px" }, text: branchText(entry) }),
               entry.pushError && !entry.pushTarget ? h("div", { style: { fontSize: "11px", color: "var(--status-conflict)" }, text: entry.pushError }) : null,
-              outcome ? h("div", { style: { fontSize: "11px", color: outcome.ok ? "var(--status-ok)" : "var(--status-conflict)" }, text: outcome.ok ? t("pushed") : errorText(outcome) }) : null,
+              status,
             ]),
           ]);
           rowsHost.append(row);
@@ -2670,16 +2930,21 @@ window.__PI_IDEA_GIT_SURFACE__ = "git";
           return;
         }
         pushing = true;
-        pushButton.disabled = true;
-        pushButton.textContent = t("pushing");
+        closeButton.disabled = true;
+        activeRoot = null;
+        doneCount = 0;
+        totalCount = targets.length;
+        // Single-repo pushes read better as a plain "Pushing…"; the per-row
+        // spinner already says which repo, and a 0%-of-1 bar adds nothing.
+        setButtonBusy(pushButton, true, totalCount > 1 ? tf("pushingRepo", { done: 1, total: totalCount }) : t("pushing"));
+        paintProgress();
         paintRows();
         for (const entry of targets) {
+          activeRoot = entry.root;
           outcomes.set(entry.root, null);
+          paintProgress();
           paintRows();
-          const payload = {};
-          // The active repo needs no override; every other row pushes by path.
-          if (!entry.active) payload.repoRoot = entry.root;
-          else payload.repoRoot = entry.root;
+          const payload = { repoRoot: entry.root };
           if (!entry.branch?.upstream) payload.setUpstream = true;
           let result = null;
           try {
@@ -2692,11 +2957,15 @@ window.__PI_IDEA_GIT_SURFACE__ = "git";
             pushedAny = true;
             try { await refreshTrackingRefs(result); } catch { /* keep pushing */ }
           }
+          doneCount += 1;
+          paintProgress();
           paintRows();
         }
+        activeRoot = null;
         pushing = false;
-        pushButton.disabled = false;
-        pushButton.textContent = t("pushAll");
+        setButtonBusy(pushButton, false);
+        closeButton.disabled = false;
+        paintProgress();
         paintRows();
         try { await options.onPushed?.([...outcomes.values()]); } catch { /* view refreshes anyway */ }
       };
@@ -2709,6 +2978,7 @@ window.__PI_IDEA_GIT_SURFACE__ = "git";
       }, [
         h("div", { style: { fontWeight: "600", marginBottom: "2px" }, text: t("pushDialogTitle") }),
         h("div", { class: "muted", style: { fontSize: "11px" }, text: t("pushDialogSubtitle") }),
+        progressTrack,
         rowsHost,
         hint,
         h("div", { style: { display: "flex", justifyContent: "flex-end", gap: "8px", marginTop: "14px" } }, [
@@ -3033,6 +3303,11 @@ window.__PI_IDEA_GIT_SURFACE__ = "git";
     reportSync,
     refreshTrackingRefs,
     appShortcutHintBinding,
+    spinner,
+    setButtonBusy,
+    withBusy,
+    taskPill,
+    runWithPill,
     // Shared by both tool windows, so the two cannot disagree about which
     // repository they are showing — the same reason the branch chip is shared.
     repoSelector: { mount: mountRepoSelector },
@@ -3774,7 +4049,7 @@ function markSubmodule(hunk) {
           title: entry.subject,
           onSelect: async () => {
             if (entry.current) return;
-            const checkedOut = await invoke("git/checkout", { name: entry.name });
+            const checkedOut = await PIG.runWithPill(t("checkingOut"), () => invoke("git/checkout", { name: entry.name }));
             report(checkedOut, `${t("checkout")}: ${entry.name}`);
             ctx.onChanged?.();
           },
@@ -3788,7 +4063,7 @@ function markSubmodule(hunk) {
             label: entry.name,
             title: entry.subject,
             onSelect: async () => {
-              const checkedOut = await invoke("git/checkout", { name: entry.name, startPoint: entry.name });
+              const checkedOut = await PIG.runWithPill(t("checkingOut"), () => invoke("git/checkout", { name: entry.name, startPoint: entry.name }));
               report(checkedOut, `${t("checkout")}: ${entry.name}`);
               ctx.onChanged?.();
             },
@@ -3806,7 +4081,7 @@ function markSubmodule(hunk) {
             confirmLabel: t("newBranch"),
           });
           if (!name) return;
-          const created = await invoke("git/checkout", { name, create: true });
+          const created = await PIG.runWithPill(t("checkingOut"), () => invoke("git/checkout", { name, create: true }));
           report(created, `${t("newBranch")}: ${name}`);
           ctx.onChanged?.();
         },
@@ -3815,14 +4090,14 @@ function markSubmodule(hunk) {
       items.push({
         label: t("fetch"),
         onSelect: async () => {
-          report(await invoke("git/fetch"), t("fetch"));
+          report(await PIG.runWithPill(t("fetching"), () => invoke("git/fetch")), t("fetch"));
           ctx.onChanged?.();
         },
       });
       items.push({
         label: t("pull"),
         onSelect: async () => {
-          const result = await invoke("git/pull");
+          const result = await PIG.runWithPill(t("pulling"), () => invoke("git/pull"));
           report(result, t("pull"));
           ctx.onChanged?.();
         },
@@ -3834,7 +4109,7 @@ function markSubmodule(hunk) {
           // tracks. Sending `origin` plus the local name pushed a new branch to
           // `origin` for anything tracking elsewhere, while the ↑/↓ chip kept
           // counting against the real upstream.
-          const result = await invoke("git/push", { setUpstream: !branch?.upstream });
+          const result = await PIG.runWithPill(t("pushing"), () => invoke("git/push", { setUpstream: !branch?.upstream }));
           report(result, t("push"));
           // A refusal means the remote moved on, so the chip is stale exactly
           // when it matters most.
@@ -3860,7 +4135,7 @@ function markSubmodule(hunk) {
             danger: true,
           });
           if (confirmed === null) return;
-          const result = await invoke("git/push", { forceWithLease: true });
+          const result = await PIG.runWithPill(t("pushing"), () => invoke("git/push", { forceWithLease: true }));
           report(result, t("forcePush"));
           await PIG.refreshTrackingRefs(result);
           ctx.onChanged?.();
@@ -3878,7 +4153,7 @@ function markSubmodule(hunk) {
             confirmLabel: t("stash"),
           });
           if (message === null) return;
-          report(await invoke("git/stash", { action: "push", message }), t("stash"));
+          report(await PIG.runWithPill(t("stashing"), () => invoke("git/stash", { action: "push", message })), t("stash"));
           ctx.onChanged?.();
         },
       });
@@ -3889,7 +4164,7 @@ function markSubmodule(hunk) {
           items.push({
             label: `${stash.ref}  ${stash.subject ?? ""}`.trim(),
             onSelect: async () => {
-              report(await invoke("git/stash", { action: "pop", ref: stash.ref }), t("unstash"));
+              report(await PIG.runWithPill(t("unstashing"), () => invoke("git/stash", { action: "pop", ref: stash.ref })), t("unstash"));
               ctx.onChanged?.();
             },
           });
@@ -3936,6 +4211,12 @@ function markSubmodule(hunk) {
        repo: null,
        error: null,
        busy: false,
+      // What the toolbar is waiting on (null | "refresh" | "fetch" | "push"):
+      // the active button spins, the others are disabled, double clicks land
+      // on the guard instead of spawning a second process.
+      syncing: null,
+      // What the commit button is waiting on (null | "commit" | "commit-push").
+      busyKind: null,
        selection: null,
        diff: null,
        diffUnified: true,
@@ -4111,12 +4392,44 @@ function markSubmodule(hunk) {
       toolbar.append(repoHolder);
       toolbar.append(branchHolder);
       toolbar.append(h("div", { class: "toolbar-separator" }));
-      toolbar.append(iconButton("refresh", tip("refresh", KEYS.refresh), () => refresh()));
-      toolbar.append(iconButton("fetch", t("fetch"), async () => {
-        const result = await invoke("git/fetch");
-        if (report(result, t("fetch"))) await refresh();
+      // A sync button that is running spins in place; its siblings go
+      // disabled so a double click cannot spawn a second process.
+      const syncing = state.syncing ?? null;
+      const syncDisabled = Boolean(syncing || state.busy);
+      const syncButton = (name, title, kind, onClick) => {
+        const button = iconButton(name, title, onClick, { disabled: syncDisabled });
+        if (syncing === kind) {
+          button.classList.add("busy");
+          button.append(PIG.spinner(false));
+        }
+        return button;
+      };
+      toolbar.append(syncButton("refresh", tip("refresh", KEYS.refresh), "refresh", async () => {
+        if (state.syncing || state.busy) return;
+        state.syncing = "refresh";
+        paintToolbar();
+        try {
+          await refresh();
+        } finally {
+          state.syncing = null;
+          paintToolbar();
+        }
       }));
-      toolbar.append(iconButton("push", t("push"), async () => {
+      toolbar.append(syncButton("fetch", t("fetch"), "fetch", async () => {
+        if (state.syncing || state.busy) return;
+        state.syncing = "fetch";
+        paintToolbar();
+        try {
+          const result = await invoke("git/fetch");
+          if (report(result, t("fetch"))) await refresh();
+          else paintToolbar();
+        } finally {
+          state.syncing = null;
+          paintToolbar();
+        }
+      }));
+      toolbar.append(syncButton("push", t("push"), "push", async () => {
+        if (state.syncing || state.busy) return;
         // Note: 多仓走 Push 对话框（逐仓列出去向与结果），单仓保持直推 — 见 .agents/notes/implemented/architecture/2026-09-12-multi-repo-push.md
         const multi = (state.allRepos?.length ?? 0) > 1 || (state.submodules?.length ?? 0) > 0;
         if (multi) {
@@ -4126,15 +4439,22 @@ function markSubmodule(hunk) {
         }
         // The engine resolves the target from the branch's own upstream; see
         // the push item in the branch menu.
-        const result = await invoke("git/push", { setUpstream: !state.repo?.branch?.upstream });
-        report(result, t("push"));
-        await PIG.refreshTrackingRefs(result);
-        await refresh();
+        state.syncing = "push";
+        paintToolbar();
+        try {
+          const result = await invoke("git/push", { setUpstream: !state.repo?.branch?.upstream });
+          report(result, t("push"));
+          await PIG.refreshTrackingRefs(result);
+          await refresh();
+        } finally {
+          state.syncing = null;
+          paintToolbar();
+        }
       }));
       toolbar.append(h("div", { class: "toolbar-separator" }));
-      toolbar.append(iconButton("plus", tip("stageFile", KEYS.stage), () => stageSelected(true), { disabled: !canStageSelected() }));
-      toolbar.append(iconButton("minus", t("unstageFile"), () => stageSelected(false), { disabled: !canUnstageSelected() }));
-      toolbar.append(iconButton("rollback", tip("rollback", KEYS.rollback), rollbackSelected, { disabled: !state.selection }));
+      toolbar.append(iconButton("plus", tip("stageFile", KEYS.stage), () => stageSelected(true), { disabled: syncDisabled || !canStageSelected() }));
+      toolbar.append(iconButton("minus", t("unstageFile"), () => stageSelected(false), { disabled: syncDisabled || !canUnstageSelected() }));
+      toolbar.append(iconButton("rollback", tip("rollback", KEYS.rollback), rollbackSelected, { disabled: syncDisabled || !state.selection }));
       toolbar.append(h("div", { class: "toolbar-spacer" }));
       toolbar.append(
         h("span", {
@@ -4810,8 +5130,21 @@ function markSubmodule(hunk) {
      * pick can only be left by finishing it or by aborting, and the plugin's own
      * Pull can produce one, so the escape has to be here and not in a terminal.
      */
-     function paintCommit() {
-       commitButton.disabled = state.busy || (!state.message.trim() && !state.amend);
+    function paintCommit() {
+      // While a commit (or its follow-up push) runs, the button itself is the
+      // progress: spinner plus phase, so a slow hook or a slow push never
+      // looks like the click was lost.
+      PIG.clear(commitButton);
+      if (state.busy) {
+        commitButton.classList.add("busy");
+        commitButton.append(PIG.spinner(true));
+        commitButton.append(h("span", { text: t(state.busyKind === "commit-push" ? "committingAndPushing" : "committing") }));
+      } else {
+        commitButton.classList.remove("busy");
+        commitButton.append(t("commit"));
+      }
+      commitButton.disabled = state.busy || (!state.message.trim() && !state.amend);
+      commitMenuButton.disabled = state.busy;
        const totals = totalCounts();
        const staged = totals.staged;
        const total = totals.staged + totals.unstaged + totals.untracked + totals.conflicted;
@@ -4850,10 +5183,15 @@ function markSubmodule(hunk) {
         type: "button",
         style: { marginLeft: "8px" },
         text: label,
-        onclick: async () => {
-          const result = await invoke("git/sequencer", { operation, action });
-          report(result, label);
-          await refresh();
+        onclick: async (event) => {
+          // A continue can run a real merge behind it; spin the clicked button
+          // itself so the wait has an owner. (The button may be rebuilt by the
+          // refresh below — restoring a detached node is a harmless no-op.)
+          await PIG.withBusy(event.currentTarget, label, async () => {
+            const result = await invoke("git/sequencer", { operation, action });
+            report(result, label);
+            await refresh();
+          });
         },
       });
     }
@@ -4867,8 +5205,9 @@ function markSubmodule(hunk) {
       const busy = state.generating;
       generateButton.disabled = busy;
       generateMenuButton.disabled = busy;
+      generateButton.classList.toggle("busy", busy);
       PIG.clear(generateButton);
-      generateButton.append(icon("sparkles", 13));
+      generateButton.append(busy ? PIG.spinner(false) : icon("sparkles", 13));
       generateButton.append(h("span", { class: "gen-label", text: busy ? t("generating") : t("generateMessage") }));
       generateButton.title = PIG.tf("generateScope", { action: t("generateMessage"), lang: languageLabel() });
     }
@@ -5198,7 +5537,7 @@ function markSubmodule(hunk) {
     }
 
      async function commit(withPush) {
-       if (state.busy) return;
+       if (state.busy || state.syncing) return;
        const message = state.message.trim();
        if (!message && !state.amend) {
          toast(t("commitMessage"), "error");
@@ -5216,8 +5555,10 @@ function markSubmodule(hunk) {
          return;
        }
        if (!targets.length) targets.push(rootCtx());
-       state.busy = true;
-       paintCommit();
+      state.busy = true;
+      state.busyKind = "commit";
+      paintCommit();
+      paintToolbar();
        let failed = null;
        let lastResult = null;
        for (const target of targets) {
@@ -5230,13 +5571,15 @@ function markSubmodule(hunk) {
          }
          lastResult = { target, result };
        }
-       state.busy = false;
-       if (failed) {
-         toast(`${failed.target.rk === "." ? "" : `${failed.target.rk}: `}${PIG.errorText(failed.result)}`, "error");
-         paintCommit();
-         await refresh();
-         return;
-       }
+      if (failed) {
+        state.busy = false;
+        state.busyKind = null;
+        toast(`${failed.target.rk === "." ? "" : `${failed.target.rk}: `}${PIG.errorText(failed.result)}`, "error");
+        paintCommit();
+        paintToolbar();
+        await refresh();
+        return;
+      }
        if (message) {
          const remembered = await invoke("git/message-used", { message });
          state.messages = remembered.prefs?.messages ?? state.messages;
@@ -5249,6 +5592,8 @@ function markSubmodule(hunk) {
        else toast(firstLine(lastResult?.result?.stdout) || t("commit"), "info");
 
       if (withPush) {
+        state.busyKind = "commit-push";
+        paintCommit();
         // Note: 聚合提交的 Push 把刚才提交的 N 个仓逐个推出去（子模块先、父仓后），单仓失败点名且不挡后续 — 见 .agents/notes/implemented/architecture/2026-09-12-multi-repo-push.md
         const pushTargets = targets.map((target) => ({
           rk: target.rk,
@@ -5266,7 +5611,9 @@ function markSubmodule(hunk) {
         else if (okCount !== outcomes.length && outcomes.length > 1) toast(PIG.tf("pushPartial", { ok: okCount, total: outcomes.length }), outcomes.length && okCount ? "info" : "error");
         else if (outcomes.length === 1) report(outcomes[0], t("push"));
       }
-       await refresh();
+      state.busy = false;
+      state.busyKind = null;
+      await refresh();
      }
 
     function openMessageHistory(event) {
@@ -5382,7 +5729,22 @@ function markSubmodule(hunk) {
        amendBox.checked = false;
        signoffBox.checked = false;
      }
+    // Overlapping refreshes share one dimming counter so the list stays
+    // dimmed until the last one settles, instead of flashing mid-flight.
+    let refreshDepth = 0;
+    function setRefreshing(on) {
+      refreshDepth = Math.max(0, refreshDepth + (on ? 1 : -1));
+      root.classList.toggle("is-refreshing", refreshDepth > 0);
+    }
      async function refresh() {
+       setRefreshing(true);
+       try {
+         return await refreshInner();
+       } finally {
+         setRefreshing(false);
+       }
+     }
+     async function refreshInner() {
        const result = await invoke("git/repo");
        if (!result.ok) {
          state.repo = null;
@@ -5762,6 +6124,9 @@ function markSubmodule(hunk) {
       showBranches: true,
       showDetails: true,
       detailHeight: 46,
+      // What the toolbar is waiting on (null | "refresh" | "push"): the active
+      // button spins, the other goes disabled.
+      syncing: null,
     };
 
     const toolbar = h("div", { class: "toolbar" });
@@ -5799,11 +6164,38 @@ function markSubmodule(hunk) {
       toolbar.append(repoHolder);
       toolbar.append(branchHolder);
       toolbar.append(h("div", { class: "toolbar-separator" }));
-      toolbar.append(iconButton("refresh", tip("refresh", KEYS.refresh), () => refresh()));
-      toolbar.append(iconButton("push", t("push"), async () => {
+      const syncDisabled = Boolean(state.syncing);
+      const syncButton = (name, title, kind, onClick) => {
+        const button = iconButton(name, title, onClick, { disabled: syncDisabled });
+        if (state.syncing === kind) {
+          button.classList.add("busy");
+          button.append(PIG.spinner(false));
+        }
+        return button;
+      };
+      toolbar.append(syncButton("refresh", tip("refresh", KEYS.refresh), "refresh", async () => {
+        if (state.syncing) return;
+        state.syncing = "refresh";
+        paintToolbar();
+        try {
+          await refresh();
+        } finally {
+          state.syncing = null;
+          paintToolbar();
+        }
+      }));
+      toolbar.append(syncButton("push", t("push"), "push", async () => {
+        if (state.syncing) return;
         // Note: Git 视图的 Push 同样走多仓对话框，单仓时对话框内只有一行 — 见 .agents/notes/implemented/architecture/2026-09-12-multi-repo-push.md
-        await PIG.openPushDialog({ onPushed: async () => { await refresh(); } });
-        await refresh();
+        state.syncing = "push";
+        paintToolbar();
+        try {
+          await PIG.openPushDialog({ onPushed: async () => { await refresh(); } });
+          await refresh();
+        } finally {
+          state.syncing = null;
+          paintToolbar();
+        }
       }));
       // Held in a variable so the Find shortcut can open the same popup.
       searchButton = iconButton("search", tip("search", KEYS.find), (event) => {
@@ -5973,7 +6365,7 @@ function markSubmodule(hunk) {
 
     async function checkout(branch) {
       if (branch.current) return;
-      const result = await invoke("git/checkout", { name: branch.name, startPoint: branch.remote ? branch.name : undefined });
+      const result = await PIG.runWithPill(t("checkingOut"), () => invoke("git/checkout", { name: branch.name, startPoint: branch.remote ? branch.name : undefined }));
       toast(result.ok ? `${t("checkout")}: ${branch.name}` : result.message, result.ok ? "info" : "error");
       await refresh();
     }
@@ -5991,7 +6383,7 @@ function markSubmodule(hunk) {
               confirmLabel: t("newBranch"),
             });
             if (!name) return;
-            const result = await invoke("git/checkout", { name, create: true, startPoint: branch.name });
+            const result = await PIG.runWithPill(t("checkingOut"), () => invoke("git/checkout", { name, create: true, startPoint: branch.name }));
             toast(result.ok ? `${t("newBranch")}: ${name}` : result.message, result.ok ? "info" : "error");
             await refresh();
           },
@@ -6003,7 +6395,7 @@ function markSubmodule(hunk) {
             // No remote/branch: this menu belongs to the Log, where the item is
             // about the checked-out branch. The engine pushes where that branch
             // tracks instead of assuming `origin`.
-            const result = await invoke("git/push", { setUpstream: !state.repo?.branch?.upstream });
+            const result = await PIG.runWithPill(t("pushing"), () => invoke("git/push", { setUpstream: !state.repo?.branch?.upstream }));
             PIG.reportSync(result, t("push"));
             await PIG.refreshTrackingRefs(result);
             await refresh();
@@ -6012,7 +6404,7 @@ function markSubmodule(hunk) {
         {
           label: t("fetch"),
           onSelect: async () => {
-            PIG.reportSync(await invoke("git/fetch"), t("fetch"));
+            PIG.reportSync(await PIG.runWithPill(t("fetching"), () => invoke("git/fetch")), t("fetch"));
             await refresh();
           },
         },
@@ -6097,7 +6489,7 @@ function markSubmodule(hunk) {
         {
           label: t("checkoutRevision"),
           onSelect: async () => {
-            const result = await invoke("git/checkout", { name: commit.hash });
+            const result = await PIG.runWithPill(t("checkingOut"), () => invoke("git/checkout", { name: commit.hash }));
             toast(result.ok ? `${t("checkoutRevision")}: ${commit.short}` : result.message, result.ok ? "info" : "error");
             await refresh();
           },
@@ -6112,7 +6504,7 @@ function markSubmodule(hunk) {
               confirmLabel: t("newBranch"),
             });
             if (!name) return;
-            const result = await invoke("git/checkout", { name, create: true, startPoint: commit.hash });
+            const result = await PIG.runWithPill(t("checkingOut"), () => invoke("git/checkout", { name, create: true, startPoint: commit.hash }));
             toast(result.ok ? `${t("newBranch")}: ${name}` : result.message, result.ok ? "info" : "error");
             await refresh();
           },
@@ -6136,7 +6528,7 @@ function markSubmodule(hunk) {
         {
           label: t("cherryPick"),
           onSelect: async () => {
-            const result = await invoke("git/cherry-pick", { hash: commit.hash });
+            const result = await PIG.runWithPill(t("cherryPick"), () => invoke("git/cherry-pick", { hash: commit.hash }));
             toast(result.ok ? `${t("cherryPick")}: ${commit.short}` : result.message, result.ok ? "info" : "error");
             await refresh();
           },
@@ -6144,7 +6536,7 @@ function markSubmodule(hunk) {
         {
           label: t("revert"),
           onSelect: async () => {
-            const result = await invoke("git/revert", { hash: commit.hash });
+            const result = await PIG.runWithPill(t("revert"), () => invoke("git/revert", { hash: commit.hash }));
             toast(result.ok ? `${t("revert")}: ${commit.short}` : result.message, result.ok ? "info" : "error");
             await refresh();
           },
@@ -6161,7 +6553,7 @@ function markSubmodule(hunk) {
               danger: true,
             });
             if (!mode) return;
-            const result = await invoke("git/reset", { hash: commit.hash, mode: String(mode).trim().toLowerCase() });
+            const result = await PIG.runWithPill(t("reset"), () => invoke("git/reset", { hash: commit.hash, mode: String(mode).trim().toLowerCase() }));
             toast(result.ok ? `${t("reset")} --${mode} ${commit.short}` : result.message, result.ok ? "info" : "error");
             await refresh();
           },
@@ -6246,7 +6638,23 @@ function markSubmodule(hunk) {
       activeDiffOverlay?.();
     }
 
+    // Same dim-while-reloading contract as the Commit view: overlapping
+    // refreshes share one counter so the list stays dimmed until the last one
+    // settles instead of flashing mid-flight.
+    let refreshDepth = 0;
+    function setRefreshing(on) {
+      refreshDepth = Math.max(0, refreshDepth + (on ? 1 : -1));
+      root.classList.toggle("is-refreshing", refreshDepth > 0);
+    }
     async function refresh() {
+      setRefreshing(true);
+      try {
+        return await refreshInner();
+      } finally {
+        setRefreshing(false);
+      }
+    }
+    async function refreshInner() {
       const repo = await invoke("git/repo");
       const repoRoot = repo.ok ? (repo.repo?.root ?? null) : null;
       if (loadedRepo !== undefined && repoRoot !== loadedRepo) forgoRepositoryState();

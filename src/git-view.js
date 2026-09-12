@@ -247,6 +247,9 @@
       showBranches: true,
       showDetails: true,
       detailHeight: 46,
+      // What the toolbar is waiting on (null | "refresh" | "push"): the active
+      // button spins, the other goes disabled.
+      syncing: null,
     };
 
     const toolbar = h("div", { class: "toolbar" });
@@ -284,11 +287,38 @@
       toolbar.append(repoHolder);
       toolbar.append(branchHolder);
       toolbar.append(h("div", { class: "toolbar-separator" }));
-      toolbar.append(iconButton("refresh", tip("refresh", KEYS.refresh), () => refresh()));
-      toolbar.append(iconButton("push", t("push"), async () => {
+      const syncDisabled = Boolean(state.syncing);
+      const syncButton = (name, title, kind, onClick) => {
+        const button = iconButton(name, title, onClick, { disabled: syncDisabled });
+        if (state.syncing === kind) {
+          button.classList.add("busy");
+          button.append(PIG.spinner(false));
+        }
+        return button;
+      };
+      toolbar.append(syncButton("refresh", tip("refresh", KEYS.refresh), "refresh", async () => {
+        if (state.syncing) return;
+        state.syncing = "refresh";
+        paintToolbar();
+        try {
+          await refresh();
+        } finally {
+          state.syncing = null;
+          paintToolbar();
+        }
+      }));
+      toolbar.append(syncButton("push", t("push"), "push", async () => {
+        if (state.syncing) return;
         // Note: Git 视图的 Push 同样走多仓对话框，单仓时对话框内只有一行 — 见 .agents/notes/implemented/architecture/2026-09-12-multi-repo-push.md
-        await PIG.openPushDialog({ onPushed: async () => { await refresh(); } });
-        await refresh();
+        state.syncing = "push";
+        paintToolbar();
+        try {
+          await PIG.openPushDialog({ onPushed: async () => { await refresh(); } });
+          await refresh();
+        } finally {
+          state.syncing = null;
+          paintToolbar();
+        }
       }));
       // Held in a variable so the Find shortcut can open the same popup.
       searchButton = iconButton("search", tip("search", KEYS.find), (event) => {
@@ -458,7 +488,7 @@
 
     async function checkout(branch) {
       if (branch.current) return;
-      const result = await invoke("git/checkout", { name: branch.name, startPoint: branch.remote ? branch.name : undefined });
+      const result = await PIG.runWithPill(t("checkingOut"), () => invoke("git/checkout", { name: branch.name, startPoint: branch.remote ? branch.name : undefined }));
       toast(result.ok ? `${t("checkout")}: ${branch.name}` : result.message, result.ok ? "info" : "error");
       await refresh();
     }
@@ -476,7 +506,7 @@
               confirmLabel: t("newBranch"),
             });
             if (!name) return;
-            const result = await invoke("git/checkout", { name, create: true, startPoint: branch.name });
+            const result = await PIG.runWithPill(t("checkingOut"), () => invoke("git/checkout", { name, create: true, startPoint: branch.name }));
             toast(result.ok ? `${t("newBranch")}: ${name}` : result.message, result.ok ? "info" : "error");
             await refresh();
           },
@@ -488,7 +518,7 @@
             // No remote/branch: this menu belongs to the Log, where the item is
             // about the checked-out branch. The engine pushes where that branch
             // tracks instead of assuming `origin`.
-            const result = await invoke("git/push", { setUpstream: !state.repo?.branch?.upstream });
+            const result = await PIG.runWithPill(t("pushing"), () => invoke("git/push", { setUpstream: !state.repo?.branch?.upstream }));
             PIG.reportSync(result, t("push"));
             await PIG.refreshTrackingRefs(result);
             await refresh();
@@ -497,7 +527,7 @@
         {
           label: t("fetch"),
           onSelect: async () => {
-            PIG.reportSync(await invoke("git/fetch"), t("fetch"));
+            PIG.reportSync(await PIG.runWithPill(t("fetching"), () => invoke("git/fetch")), t("fetch"));
             await refresh();
           },
         },
@@ -582,7 +612,7 @@
         {
           label: t("checkoutRevision"),
           onSelect: async () => {
-            const result = await invoke("git/checkout", { name: commit.hash });
+            const result = await PIG.runWithPill(t("checkingOut"), () => invoke("git/checkout", { name: commit.hash }));
             toast(result.ok ? `${t("checkoutRevision")}: ${commit.short}` : result.message, result.ok ? "info" : "error");
             await refresh();
           },
@@ -597,7 +627,7 @@
               confirmLabel: t("newBranch"),
             });
             if (!name) return;
-            const result = await invoke("git/checkout", { name, create: true, startPoint: commit.hash });
+            const result = await PIG.runWithPill(t("checkingOut"), () => invoke("git/checkout", { name, create: true, startPoint: commit.hash }));
             toast(result.ok ? `${t("newBranch")}: ${name}` : result.message, result.ok ? "info" : "error");
             await refresh();
           },
@@ -621,7 +651,7 @@
         {
           label: t("cherryPick"),
           onSelect: async () => {
-            const result = await invoke("git/cherry-pick", { hash: commit.hash });
+            const result = await PIG.runWithPill(t("cherryPick"), () => invoke("git/cherry-pick", { hash: commit.hash }));
             toast(result.ok ? `${t("cherryPick")}: ${commit.short}` : result.message, result.ok ? "info" : "error");
             await refresh();
           },
@@ -629,7 +659,7 @@
         {
           label: t("revert"),
           onSelect: async () => {
-            const result = await invoke("git/revert", { hash: commit.hash });
+            const result = await PIG.runWithPill(t("revert"), () => invoke("git/revert", { hash: commit.hash }));
             toast(result.ok ? `${t("revert")}: ${commit.short}` : result.message, result.ok ? "info" : "error");
             await refresh();
           },
@@ -646,7 +676,7 @@
               danger: true,
             });
             if (!mode) return;
-            const result = await invoke("git/reset", { hash: commit.hash, mode: String(mode).trim().toLowerCase() });
+            const result = await PIG.runWithPill(t("reset"), () => invoke("git/reset", { hash: commit.hash, mode: String(mode).trim().toLowerCase() }));
             toast(result.ok ? `${t("reset")} --${mode} ${commit.short}` : result.message, result.ok ? "info" : "error");
             await refresh();
           },
@@ -731,7 +761,23 @@
       activeDiffOverlay?.();
     }
 
+    // Same dim-while-reloading contract as the Commit view: overlapping
+    // refreshes share one counter so the list stays dimmed until the last one
+    // settles instead of flashing mid-flight.
+    let refreshDepth = 0;
+    function setRefreshing(on) {
+      refreshDepth = Math.max(0, refreshDepth + (on ? 1 : -1));
+      root.classList.toggle("is-refreshing", refreshDepth > 0);
+    }
     async function refresh() {
+      setRefreshing(true);
+      try {
+        return await refreshInner();
+      } finally {
+        setRefreshing(false);
+      }
+    }
+    async function refreshInner() {
       const repo = await invoke("git/repo");
       const repoRoot = repo.ok ? (repo.repo?.root ?? null) : null;
       if (loadedRepo !== undefined && repoRoot !== loadedRepo) forgoRepositoryState();

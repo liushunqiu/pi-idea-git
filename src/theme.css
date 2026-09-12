@@ -1320,3 +1320,127 @@ textarea {
 .diff-sbs .diff-line .num {
   width: 34px;
 }
+/* ------------------------------------------------- busy & progress ---- */
+/* Long Git operations (push / fetch / pull / commit / checkout) must never */
+/* look ignored while the process runs: every trigger shows a spinner where */
+/* it was clicked, plus a floating pill so menu actions have feedback too. */
+.spinner {
+  flex: 0 0 auto;
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  border: 1.5px solid currentColor;
+  border-top-color: transparent;
+  opacity: 0.85;
+  animation: pig-spin 0.7s linear infinite;
+}
+.spinner.large {
+  width: 14px;
+  height: 14px;
+  border-width: 2px;
+}
+@keyframes pig-spin {
+  to { transform: rotate(360deg); }
+}
+/* An icon button that is running something: keep its size so the toolbar */
+/* does not jump, spin the mark in place. */
+button.icon.busy {
+  color: var(--fg-secondary);
+  cursor: wait;
+}
+button.icon.busy svg {
+  display: none;
+}
+button.icon.busy .spinner {
+  display: block;
+  margin: 2px;
+}
+/* Text buttons keep their width while busy so the dialog footer stays put. */
+button.busy {
+  cursor: wait;
+}
+button.busy .spinner {
+  margin-right: 6px;
+  vertical-align: -1px;
+}
+/* One floating pill for actions with no button to spin in (branch-menu */
+/* fetch / pull / push / checkout, stash pop): top-centre, above popups, */
+/* below modal dialogs. */
+.task-pill-layer {
+  position: fixed;
+  top: 10px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 70;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  align-items: center;
+  pointer-events: none;
+}
+.task-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  max-width: min(420px, 90vw);
+  padding: 6px 12px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--panel-bg);
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.28);
+  color: var(--fg-secondary);
+  font-size: 12px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  animation: task-pill-in 160ms ease-out;
+}
+.task-pill.done {
+  color: var(--status-added);
+}
+.task-pill.failed {
+  color: var(--status-conflict);
+}
+@keyframes task-pill-in {
+  from { opacity: 0; transform: translateY(-6px); }
+}
+/* Push dialog: thin progress track under the subtitle plus a per-row state. */
+.push-progress {
+  height: 3px;
+  margin-top: 8px;
+  border-radius: 2px;
+  background: var(--border-soft);
+  overflow: hidden;
+}
+.push-progress-fill {
+  height: 100%;
+  width: 0;
+  border-radius: 2px;
+  background: var(--button-primary-bg);
+  transition: width 180ms ease-out;
+}
+.push-row.is-active {
+  border-color: var(--button-primary-bg);
+  background: var(--diff-modified);
+}
+.push-row .row-status {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+}
+.push-row .row-status.pushing {
+  color: var(--fg-secondary);
+}
+.push-row .row-status.ok {
+  color: var(--status-added);
+}
+.push-row .row-status.error {
+  color: var(--status-conflict);
+}
+/* A slow reload reads as loading, not frozen: dim the list a touch. */
+.is-refreshing .scroll.list,
+.is-refreshing .commits-pane {
+  opacity: 0.65;
+  transition: opacity 120ms ease-out;
+}

@@ -235,7 +235,7 @@
           title: entry.subject,
           onSelect: async () => {
             if (entry.current) return;
-            const checkedOut = await invoke("git/checkout", { name: entry.name });
+            const checkedOut = await PIG.runWithPill(t("checkingOut"), () => invoke("git/checkout", { name: entry.name }));
             report(checkedOut, `${t("checkout")}: ${entry.name}`);
             ctx.onChanged?.();
           },
@@ -249,7 +249,7 @@
             label: entry.name,
             title: entry.subject,
             onSelect: async () => {
-              const checkedOut = await invoke("git/checkout", { name: entry.name, startPoint: entry.name });
+              const checkedOut = await PIG.runWithPill(t("checkingOut"), () => invoke("git/checkout", { name: entry.name, startPoint: entry.name }));
               report(checkedOut, `${t("checkout")}: ${entry.name}`);
               ctx.onChanged?.();
             },
@@ -267,7 +267,7 @@
             confirmLabel: t("newBranch"),
           });
           if (!name) return;
-          const created = await invoke("git/checkout", { name, create: true });
+          const created = await PIG.runWithPill(t("checkingOut"), () => invoke("git/checkout", { name, create: true }));
           report(created, `${t("newBranch")}: ${name}`);
           ctx.onChanged?.();
         },
@@ -276,14 +276,14 @@
       items.push({
         label: t("fetch"),
         onSelect: async () => {
-          report(await invoke("git/fetch"), t("fetch"));
+          report(await PIG.runWithPill(t("fetching"), () => invoke("git/fetch")), t("fetch"));
           ctx.onChanged?.();
         },
       });
       items.push({
         label: t("pull"),
         onSelect: async () => {
-          const result = await invoke("git/pull");
+          const result = await PIG.runWithPill(t("pulling"), () => invoke("git/pull"));
           report(result, t("pull"));
           ctx.onChanged?.();
         },
@@ -295,7 +295,7 @@
           // tracks. Sending `origin` plus the local name pushed a new branch to
           // `origin` for anything tracking elsewhere, while the ↑/↓ chip kept
           // counting against the real upstream.
-          const result = await invoke("git/push", { setUpstream: !branch?.upstream });
+          const result = await PIG.runWithPill(t("pushing"), () => invoke("git/push", { setUpstream: !branch?.upstream }));
           report(result, t("push"));
           // A refusal means the remote moved on, so the chip is stale exactly
           // when it matters most.
@@ -321,7 +321,7 @@
             danger: true,
           });
           if (confirmed === null) return;
-          const result = await invoke("git/push", { forceWithLease: true });
+          const result = await PIG.runWithPill(t("pushing"), () => invoke("git/push", { forceWithLease: true }));
           report(result, t("forcePush"));
           await PIG.refreshTrackingRefs(result);
           ctx.onChanged?.();
@@ -339,7 +339,7 @@
             confirmLabel: t("stash"),
           });
           if (message === null) return;
-          report(await invoke("git/stash", { action: "push", message }), t("stash"));
+          report(await PIG.runWithPill(t("stashing"), () => invoke("git/stash", { action: "push", message })), t("stash"));
           ctx.onChanged?.();
         },
       });
@@ -350,7 +350,7 @@
           items.push({
             label: `${stash.ref}  ${stash.subject ?? ""}`.trim(),
             onSelect: async () => {
-              report(await invoke("git/stash", { action: "pop", ref: stash.ref }), t("unstash"));
+              report(await PIG.runWithPill(t("unstashing"), () => invoke("git/stash", { action: "pop", ref: stash.ref })), t("unstash"));
               ctx.onChanged?.();
             },
           });
@@ -397,6 +397,12 @@
        repo: null,
        error: null,
        busy: false,
+      // What the toolbar is waiting on (null | "refresh" | "fetch" | "push"):
+      // the active button spins, the others are disabled, double clicks land
+      // on the guard instead of spawning a second process.
+      syncing: null,
+      // What the commit button is waiting on (null | "commit" | "commit-push").
+      busyKind: null,
        selection: null,
        diff: null,
        diffUnified: true,
@@ -572,12 +578,44 @@
       toolbar.append(repoHolder);
       toolbar.append(branchHolder);
       toolbar.append(h("div", { class: "toolbar-separator" }));
-      toolbar.append(iconButton("refresh", tip("refresh", KEYS.refresh), () => refresh()));
-      toolbar.append(iconButton("fetch", t("fetch"), async () => {
-        const result = await invoke("git/fetch");
-        if (report(result, t("fetch"))) await refresh();
+      // A sync button that is running spins in place; its siblings go
+      // disabled so a double click cannot spawn a second process.
+      const syncing = state.syncing ?? null;
+      const syncDisabled = Boolean(syncing || state.busy);
+      const syncButton = (name, title, kind, onClick) => {
+        const button = iconButton(name, title, onClick, { disabled: syncDisabled });
+        if (syncing === kind) {
+          button.classList.add("busy");
+          button.append(PIG.spinner(false));
+        }
+        return button;
+      };
+      toolbar.append(syncButton("refresh", tip("refresh", KEYS.refresh), "refresh", async () => {
+        if (state.syncing || state.busy) return;
+        state.syncing = "refresh";
+        paintToolbar();
+        try {
+          await refresh();
+        } finally {
+          state.syncing = null;
+          paintToolbar();
+        }
       }));
-      toolbar.append(iconButton("push", t("push"), async () => {
+      toolbar.append(syncButton("fetch", t("fetch"), "fetch", async () => {
+        if (state.syncing || state.busy) return;
+        state.syncing = "fetch";
+        paintToolbar();
+        try {
+          const result = await invoke("git/fetch");
+          if (report(result, t("fetch"))) await refresh();
+          else paintToolbar();
+        } finally {
+          state.syncing = null;
+          paintToolbar();
+        }
+      }));
+      toolbar.append(syncButton("push", t("push"), "push", async () => {
+        if (state.syncing || state.busy) return;
         // Note: 多仓走 Push 对话框（逐仓列出去向与结果），单仓保持直推 — 见 .agents/notes/implemented/architecture/2026-09-12-multi-repo-push.md
         const multi = (state.allRepos?.length ?? 0) > 1 || (state.submodules?.length ?? 0) > 0;
         if (multi) {
@@ -587,15 +625,22 @@
         }
         // The engine resolves the target from the branch's own upstream; see
         // the push item in the branch menu.
-        const result = await invoke("git/push", { setUpstream: !state.repo?.branch?.upstream });
-        report(result, t("push"));
-        await PIG.refreshTrackingRefs(result);
-        await refresh();
+        state.syncing = "push";
+        paintToolbar();
+        try {
+          const result = await invoke("git/push", { setUpstream: !state.repo?.branch?.upstream });
+          report(result, t("push"));
+          await PIG.refreshTrackingRefs(result);
+          await refresh();
+        } finally {
+          state.syncing = null;
+          paintToolbar();
+        }
       }));
       toolbar.append(h("div", { class: "toolbar-separator" }));
-      toolbar.append(iconButton("plus", tip("stageFile", KEYS.stage), () => stageSelected(true), { disabled: !canStageSelected() }));
-      toolbar.append(iconButton("minus", t("unstageFile"), () => stageSelected(false), { disabled: !canUnstageSelected() }));
-      toolbar.append(iconButton("rollback", tip("rollback", KEYS.rollback), rollbackSelected, { disabled: !state.selection }));
+      toolbar.append(iconButton("plus", tip("stageFile", KEYS.stage), () => stageSelected(true), { disabled: syncDisabled || !canStageSelected() }));
+      toolbar.append(iconButton("minus", t("unstageFile"), () => stageSelected(false), { disabled: syncDisabled || !canUnstageSelected() }));
+      toolbar.append(iconButton("rollback", tip("rollback", KEYS.rollback), rollbackSelected, { disabled: syncDisabled || !state.selection }));
       toolbar.append(h("div", { class: "toolbar-spacer" }));
       toolbar.append(
         h("span", {
@@ -1271,8 +1316,21 @@
      * pick can only be left by finishing it or by aborting, and the plugin's own
      * Pull can produce one, so the escape has to be here and not in a terminal.
      */
-     function paintCommit() {
-       commitButton.disabled = state.busy || (!state.message.trim() && !state.amend);
+    function paintCommit() {
+      // While a commit (or its follow-up push) runs, the button itself is the
+      // progress: spinner plus phase, so a slow hook or a slow push never
+      // looks like the click was lost.
+      PIG.clear(commitButton);
+      if (state.busy) {
+        commitButton.classList.add("busy");
+        commitButton.append(PIG.spinner(true));
+        commitButton.append(h("span", { text: t(state.busyKind === "commit-push" ? "committingAndPushing" : "committing") }));
+      } else {
+        commitButton.classList.remove("busy");
+        commitButton.append(t("commit"));
+      }
+      commitButton.disabled = state.busy || (!state.message.trim() && !state.amend);
+      commitMenuButton.disabled = state.busy;
        const totals = totalCounts();
        const staged = totals.staged;
        const total = totals.staged + totals.unstaged + totals.untracked + totals.conflicted;
@@ -1311,10 +1369,15 @@
         type: "button",
         style: { marginLeft: "8px" },
         text: label,
-        onclick: async () => {
-          const result = await invoke("git/sequencer", { operation, action });
-          report(result, label);
-          await refresh();
+        onclick: async (event) => {
+          // A continue can run a real merge behind it; spin the clicked button
+          // itself so the wait has an owner. (The button may be rebuilt by the
+          // refresh below — restoring a detached node is a harmless no-op.)
+          await PIG.withBusy(event.currentTarget, label, async () => {
+            const result = await invoke("git/sequencer", { operation, action });
+            report(result, label);
+            await refresh();
+          });
         },
       });
     }
@@ -1328,8 +1391,9 @@
       const busy = state.generating;
       generateButton.disabled = busy;
       generateMenuButton.disabled = busy;
+      generateButton.classList.toggle("busy", busy);
       PIG.clear(generateButton);
-      generateButton.append(icon("sparkles", 13));
+      generateButton.append(busy ? PIG.spinner(false) : icon("sparkles", 13));
       generateButton.append(h("span", { class: "gen-label", text: busy ? t("generating") : t("generateMessage") }));
       generateButton.title = PIG.tf("generateScope", { action: t("generateMessage"), lang: languageLabel() });
     }
@@ -1659,7 +1723,7 @@
     }
 
      async function commit(withPush) {
-       if (state.busy) return;
+       if (state.busy || state.syncing) return;
        const message = state.message.trim();
        if (!message && !state.amend) {
          toast(t("commitMessage"), "error");
@@ -1677,8 +1741,10 @@
          return;
        }
        if (!targets.length) targets.push(rootCtx());
-       state.busy = true;
-       paintCommit();
+      state.busy = true;
+      state.busyKind = "commit";
+      paintCommit();
+      paintToolbar();
        let failed = null;
        let lastResult = null;
        for (const target of targets) {
@@ -1691,13 +1757,15 @@
          }
          lastResult = { target, result };
        }
-       state.busy = false;
-       if (failed) {
-         toast(`${failed.target.rk === "." ? "" : `${failed.target.rk}: `}${PIG.errorText(failed.result)}`, "error");
-         paintCommit();
-         await refresh();
-         return;
-       }
+      if (failed) {
+        state.busy = false;
+        state.busyKind = null;
+        toast(`${failed.target.rk === "." ? "" : `${failed.target.rk}: `}${PIG.errorText(failed.result)}`, "error");
+        paintCommit();
+        paintToolbar();
+        await refresh();
+        return;
+      }
        if (message) {
          const remembered = await invoke("git/message-used", { message });
          state.messages = remembered.prefs?.messages ?? state.messages;
@@ -1710,6 +1778,8 @@
        else toast(firstLine(lastResult?.result?.stdout) || t("commit"), "info");
 
       if (withPush) {
+        state.busyKind = "commit-push";
+        paintCommit();
         // Note: 聚合提交的 Push 把刚才提交的 N 个仓逐个推出去（子模块先、父仓后），单仓失败点名且不挡后续 — 见 .agents/notes/implemented/architecture/2026-09-12-multi-repo-push.md
         const pushTargets = targets.map((target) => ({
           rk: target.rk,
@@ -1727,7 +1797,9 @@
         else if (okCount !== outcomes.length && outcomes.length > 1) toast(PIG.tf("pushPartial", { ok: okCount, total: outcomes.length }), outcomes.length && okCount ? "info" : "error");
         else if (outcomes.length === 1) report(outcomes[0], t("push"));
       }
-       await refresh();
+      state.busy = false;
+      state.busyKind = null;
+      await refresh();
      }
 
     function openMessageHistory(event) {
@@ -1843,7 +1915,22 @@
        amendBox.checked = false;
        signoffBox.checked = false;
      }
+    // Overlapping refreshes share one dimming counter so the list stays
+    // dimmed until the last one settles, instead of flashing mid-flight.
+    let refreshDepth = 0;
+    function setRefreshing(on) {
+      refreshDepth = Math.max(0, refreshDepth + (on ? 1 : -1));
+      root.classList.toggle("is-refreshing", refreshDepth > 0);
+    }
      async function refresh() {
+       setRefreshing(true);
+       try {
+         return await refreshInner();
+       } finally {
+         setRefreshing(false);
+       }
+     }
+     async function refreshInner() {
        const result = await invoke("git/repo");
        if (!result.ok) {
          state.repo = null;
