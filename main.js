@@ -185,7 +185,9 @@ function gitEnv() {
  *
  * @param {string[]} args
  * @param {{cwd?: string, input?: string, timeoutMs?: number}} [options]
- * @returns {Promise<{ok: boolean, stdout: string, stderr: string, code: number|null, message?: string}>}
+ * `message` is the short form for a toast; on failure it is built from *both*
+ * streams (`gitError`) and `detail` carries the whole of what Git said.
+ * @returns {Promise<{ok: boolean, stdout: string, stderr: string, code: number|null, message?: string, detail?: string|null}>}
  */
 function runGit(args, options = {}) {
   const binary = resolveGitBinary();
@@ -247,7 +249,10 @@ function runGit(args, options = {}) {
         stdout,
         stderr,
         code,
-        message: failure ?? (code === 0 ? undefined : gitError(stderr, code)),
+        message: failure ?? (code === 0 ? undefined : gitError(stdout, stderr, code)),
+        // The whole of what Git said, hints included: the toast shows `message`
+        // and links here, so nothing Git explained is lost to the six-line cap.
+        detail: code === 0 ? undefined : gitDetail(stdout, stderr),
         truncated,
       };
       recordConsole(args, result, cwd);
@@ -303,21 +308,55 @@ function firstLine(text) {
 }
 
 /**
- * Turn Git's stderr into something a person can act on.
- *
- * `git add` reports the useful detail below a header line: the header says the
- * paths are ignored, and the paths themselves are on the following lines, mixed
- * with `hint:` advice that is rarely what the user needs first. Reporting only
- * the first line — which this used to do — produces "The following paths are
- * ignored by one of your .gitignore files:" and stops, naming nothing.
+ * How many lines of Git's own output the one-line message carries. The toast is
+ * small and disappears; `detail` is where the whole thing goes.
  */
-function gitError(stderr, code) {
-  const lines = String(stderr ?? "")
-    .split("\n")
-    .map((line) => line.trimEnd())
-    .filter((line) => line.trim() && !line.trimStart().startsWith("hint:"));
+const ERROR_LINES = 6;
+/** Bounded so a runaway command cannot push megabytes through the bridge. */
+const ERROR_DETAIL_CHARS = 4000;
+
+/**
+ * Turn a failed command's output into something a person can act on.
+ *
+ * Both streams are read, because Git does not agree on one: `git push` reports
+ * the rejection on **stderr**, while `git merge` — and therefore the second half
+ * of `git pull` — reports `CONFLICT` on **stdout**. Reading only stderr, which
+ * is what this used to do, turned a conflicted pull into a message that read
+ * like a successful fetch log.
+ *
+ * `hint:` lines are dropped here because they are Git's generic advice, in
+ * English; the remedy shown instead is classified by
+ * `authHint`/`pushHint`/`pullHint` and worded by the views in the user's own
+ * language. They are still in `detail`, which is what the toast links to. When
+ * dropping them would leave nothing at all they are kept: the rule is "say
+ * something", not "say nothing that came from a hint".
+ */
+function gitError(stdout, stderr, code) {
+  const meaningful = [];
+  const hints = [];
+  const seen = new Set();
+  for (const stream of [stderr, stdout]) {
+    for (const raw of String(stream ?? "").split("\n")) {
+      const line = raw.trimEnd();
+      const key = line.trim();
+      if (!key || seen.has(key)) continue;
+      seen.add(key);
+      (key.startsWith("hint:") ? hints : meaningful).push(line);
+    }
+  }
+  const lines = meaningful.length ? meaningful : hints;
   if (!lines.length) return `git exited with ${code}`;
-  return lines.slice(0, 6).join("\n");
+  return lines.slice(0, ERROR_LINES).join("\n");
+}
+
+/** The untrimmed output, for the details dialog behind an error toast. */
+function gitDetail(stdout, stderr) {
+  const text = [stderr, stdout]
+    .map((stream) => String(stream ?? "").trim())
+    .filter(Boolean)
+    .join("\n");
+  if (!text) return null;
+  return text.length > ERROR_DETAIL_CHARS ? `${text.slice(0, ERROR_DETAIL_CHARS)}\n…` : text;
 }
 
 /**
@@ -334,9 +373,9 @@ function gitError(stderr, code) {
  * Returns a stable code, never prose: the wording belongs to the views, which
  * are the only part that knows the user's language.
  */
-function authHint(stderr) {
-  const text = String(stderr ?? "");
-  if (!text) return null;
+function authHint(stdout, stderr) {
+  const text = `${stderr ?? ""}\n${stdout ?? ""}`;
+  if (!text.trim()) return null;
   if (/Permission denied \(publickey\)|Host key verification failed|Could not read from remote repository/i.test(text)) {
     return "ssh";
   }
@@ -345,6 +384,46 @@ function authHint(stderr) {
   ) {
     return "credentials";
   }
+  return null;
+}
+
+/**
+ * Classify a refused push so the views can name the way out.
+ *
+ * Git prints `! [rejected]` (or `[remote rejected]`) and then the reason in
+ * parentheses. Two of those reasons are one situation for the user — someone
+ * else moved the branch, and it has to be integrated before it can be pushed
+ * again — and the rest are the server saying no outright. Returns a stable
+ * code, never prose.
+ */
+function pushHint(stdout, stderr) {
+  const text = `${stderr ?? ""}\n${stdout ?? ""}`;
+  if (!/!\s*\[(?:remote )?rejected\]/i.test(text)) return null;
+  if (/\((?:fetch first|non-fast-forward|stale info)\)/i.test(text)) return "remote-ahead";
+  return "remote-rejected";
+}
+/**
+ * True when `git pull` refused only because no reconcile strategy is
+ * configured — the one failure this plugin answers itself, by retrying with
+ * `--no-rebase`. Every other refusal is the user's configuration talking, and
+ * is reported as it came.
+ */
+function needsReconcile(stdout, stderr) {
+  return /Need to specify how to reconcile divergent branches/i.test(`${stdout ?? ""}\n${stderr ?? ""}`);
+}
+
+/**
+ * Classify a failed pull.
+ *
+ * `diverged` is what a user's own `pull.ff = only` says when it refuses a
+ * diverged branch. `conflicts` is the other outcome worth naming: Git reports it
+ * on stdout, and "there are conflicts to resolve" is the one thing the user must
+ * be told, since a pull that half-succeeded otherwise looks like a plain fetch.
+ */
+function pullHint(stdout, stderr) {
+  const text = `${stdout ?? ""}\n${stderr ?? ""}`;
+  if (/Need to specify how to reconcile|Not possible to fast-forward/i.test(text)) return "diverged";
+  if (/CONFLICT \(|Automatic merge failed|fix conflicts and then commit/i.test(text)) return "conflicts";
   return null;
 }
 
@@ -1018,6 +1097,142 @@ async function withRepo(handler) {
   return handler(repo);
 }
 
+/**
+ * The refs that say an operation is unfinished. None of them is visible in
+ * porcelain output.
+ */
+const SEQUENCER_REFS = [
+  ["MERGE_HEAD", "merge"],
+  ["REBASE_HEAD", "rebase"],
+  ["CHERRY_PICK_HEAD", "cherry-pick"],
+  ["REVERT_HEAD", "revert"],
+];
+
+/** Which operation is in progress, or null. One command per candidate. */
+async function probeOperation(repoRoot) {
+  for (const [ref, name] of SEQUENCER_REFS) {
+    const result = await runGit(["rev-parse", "-q", "--verify", ref], { cwd: repoRoot });
+    if (result.ok && result.stdout.trim()) return name;
+  }
+  return null;
+}
+
+/**
+ * The last answer `readOperation` gave, so the probe can stop asking on an
+ * ordinary refresh without losing the answer exactly when it matters.
+ */
+let pendingOperation = { root: null, operation: null };
+
+/**
+ * Which unfinished operation left these conflicts behind, if any.
+ *
+ * The gate is not "there are conflicts". Once every conflicted file has been
+ * staged, porcelain v2 simply stops reporting `u` lines — but the merge or
+ * rebase is still in progress, and that is precisely the moment Continue starts
+ * being able to succeed. Gating on `conflicted` therefore hid the only way out
+ * of the state the plugin itself can create. So the probe runs while there are
+ * conflicts *or* while it found an operation a moment ago, and stops only when
+ * Git agrees the operation is over. A refresh outside both cases pays nothing.
+ */
+async function readOperation(repoRoot, conflicted) {
+  if (pendingOperation.root !== repoRoot) pendingOperation = { root: repoRoot, operation: null };
+  if (!conflicted.length && !pendingOperation.operation) return null;
+  pendingOperation.operation = await probeOperation(repoRoot);
+  return pendingOperation.operation;
+}
+
+/**
+ * A ref name or remote that came from a caller, checked before it is handed to
+ * Git as a positional argument.
+ *
+ * `git push origin --force` is what a `-`-prefixed value produces, which is the
+ * one thing the lease-only rule is supposed to make impossible; the same shape
+ * would turn `git fetch` into something else entirely. The views no longer send
+ * these fields at all, so this is the engine's own boundary: the panel bridge
+ * forwards any channel to `onPanelInvoke`, and a boundary that trusts its input
+ * is not a boundary.
+ */
+function refArg(value) {
+  const text = String(value ?? "").trim();
+  if (!text) return "";
+  if (text.startsWith("-") || /\s/.test(text)) return null;
+  return text;
+}
+
+/**
+ * Where a push should go.
+ *
+ * The branch's own upstream is the only target that agrees with the ↑/↓ chip:
+ * the views used to send `origin` plus the local branch name, which pushed a new
+ * branch to `origin` while the chip kept counting against the real upstream.
+ * With no upstream there is nothing to agree with, so the fallback stays narrow
+ * — `origin`, or the single remote when there is only one — and refuses to guess
+ * when there are several. Choosing "the first remote" would be alphabetical
+ * order deciding where someone's branch gets published.
+ */
+async function resolvePushTarget(repoRoot) {
+  const upstream = await runGit(["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{upstream}"], { cwd: repoRoot });
+  const name = upstream.ok ? upstream.stdout.trim() : "";
+  if (name) {
+    const slash = name.indexOf("/");
+    // No slash means the branch tracks another *local* branch
+    // (`branch.<name>.remote = .`). There is nowhere to push to, and falling
+    // back to a remote would publish the branch somewhere it was never pointed.
+    if (slash < 1) {
+      return { ok: false, message: `This branch tracks the local branch "${name}", so there is no remote to push to.` };
+    }
+    return { ok: true, remote: name.slice(0, slash), branch: name.slice(slash + 1) };
+  }
+
+  const head = await runGit(["rev-parse", "--abbrev-ref", "HEAD"], { cwd: repoRoot });
+  // An unborn branch makes `rev-parse` print HEAD and exit non-zero: there is no
+  // commit to push, and saying so beats Git's "no upstream branch" for a command
+  // whose whole point was to set one up.
+  if (!head.ok || head.stdout.trim() === "HEAD") {
+    return { ok: false, message: "This branch has no commits yet, so there is nothing to push." };
+  }
+  const branch = head.stdout.trim();
+
+  const remotes = await runGit(["remote"], { cwd: repoRoot });
+  const names = remotes.ok ? remotes.stdout.split("\n").map((line) => line.trim()).filter(Boolean) : [];
+  if (names.includes("origin")) return { ok: true, remote: "origin", branch };
+  if (names.length === 1) return { ok: true, remote: names[0], branch };
+  if (!names.length) return { ok: false, message: "This repository has no remote to push to." };
+
+  return {
+    ok: false,
+    message: `"${branch}" has no upstream, and this repository has several remotes (${names.join(", ")}). Set one with \`git push --set-upstream <remote> ${branch}\`.`,
+  };
+}
+
+/**
+ * The sequencer commands this plugin is willing to continue or abort, and
+ * nothing else: the name comes back from `readOperation`, and a whitelist keeps
+ * a malformed payload from becoming an arbitrary `git` verb.
+ */
+const SEQUENCER = new Set(["merge", "rebase", "cherry-pick", "revert"]);
+
+/**
+ * Shape a network command's outcome for the views.
+ *
+ * `message` is what a toast can hold; `detail` is everything Git said, hints
+ * included, for the dialog behind it; the three hint codes are stable
+ * identifiers that the views word in the user's own language.
+ */
+function syncOutcome(channel, result) {
+  if (result.ok) return { ok: true, stdout: result.stdout };
+  return {
+    ok: false,
+    stdout: result.stdout,
+    stderr: result.stderr,
+    message: result.message,
+    detail: gitDetail(result.stdout, result.stderr),
+    authHint: authHint(result.stdout, result.stderr),
+    pushHint: channel === "git/push" ? pushHint(result.stdout, result.stderr) : null,
+    pullHint: channel === "git/pull" ? pullHint(result.stdout, result.stderr) : null,
+  };
+}
+
 // ---------------------------------------------------------------------------
 // Status parsing (porcelain v2)
 // ---------------------------------------------------------------------------
@@ -1174,12 +1389,18 @@ async function readStatus(repo) {
     // kind === "!" (ignored) needs no UI.
   }
 
+  // A conflicted merge/rebase/cherry-pick cannot be finished from porcelain
+  // output alone, and it is the state a conflicted `pull` leaves behind, so it
+  // has to reach the views: without it they cannot offer the way out.
+  const operation = await readOperation(repo.root, conflicted);
+
   return {
     ok: true,
     // `workspace` lets the views translate repository-relative paths into the
     // workspace-relative form the host's fs channels are scoped to.
     repo: { root: repo.root, name: repo.name, workspace: repo.workspace ?? null },
     branch,
+    operation,
     staged,
     unstaged,
     untracked,
@@ -1657,31 +1878,100 @@ async function onPanelInvoke(channel, payload = {}) {
         return { ok: result.ok, message: result.ok ? undefined : result.message };
       });
 
-    case "git/fetch":
-    case "git/push":
-    case "git/pull": {
-      const remote = String(payload.remote ?? "").trim();
-      const branch = String(payload.branch ?? "").trim();
+    case "git/fetch": {
+      const remote = refArg(payload.remote);
+      const branch = refArg(payload.branch);
+      if (remote === null || branch === null) return { ok: false, message: "Invalid remote or branch name." };
       const target = [remote, branch].filter(Boolean);
       return withRepo(async (repo) => {
-        const args = [channel.slice("git/".length), ...target];
-        // The views send this whenever the branch has no upstream, so that the
-        // first push establishes tracking and the ahead/behind counts start
-        // working. It used to be accepted and then ignored.
-        if (channel === "git/push" && payload.setUpstream === true) args.push("--set-upstream");
-        // Credential prompts are disabled, so these fail fast and visibly rather
-        // than hanging with no terminal to answer them.
-        const result = await runGit(args, {
+        // Prompts are disabled, so this fails fast and visibly rather than
+        // hanging with no terminal to answer it.
+        const result = await runGit(["fetch", ...target], {
           cwd: repo.root,
           timeoutMs: COMMAND_TIMEOUT_MS,
         });
+        return syncOutcome("git/fetch", result);
+      });
+    }
+
+    case "git/push": {
+      const remote = refArg(payload.remote);
+      const branch = refArg(payload.branch);
+      if (remote === null || branch === null) return { ok: false, message: "Invalid remote or branch name." };
+      return withRepo(async (repo) => {
+        const target = remote && branch ? { ok: true, remote, branch } : await resolvePushTarget(repo.root);
+        if (!target.ok) return target;
+        const args = ["push", target.remote, target.branch].filter(Boolean);
+        // The views send this whenever the branch has no upstream, so that the
+        // first push establishes tracking and the ahead/behind counts start
+        // working. It used to be accepted and then ignored.
+        if (payload.setUpstream === true) args.push("--set-upstream");
+        // Never a bare `--force`: the lease keeps the overwrite conditional on
+        // the remote still being where it was when this plugin last saw it, so a
+        // push that landed in between is refused instead of erased. `refArg`
+        // above is what keeps a caller from smuggling `--force` in as the remote.
+        if (payload.forceWithLease === true) args.push("--force-with-lease");
+        const result = await runGit(args, { cwd: repo.root, timeoutMs: COMMAND_TIMEOUT_MS });
+        return syncOutcome("git/push", result);
+      });
+    }
+
+    case "git/pull": {
+      const remote = refArg(payload.remote);
+      const branch = refArg(payload.branch);
+      if (remote === null || branch === null) return { ok: false, message: "Invalid remote or branch name." };
+      const target = [remote, branch].filter(Boolean);
+      return withRepo(async (repo) => {
+        // Run it as the user configured it. `git pull` itself knows
+        // `branch.<name>.rebase`, `pull.rebase` (including `merges` and
+        // `interactive`), `pull.ff` and `pull.rebase=false`; re-deriving any of
+        // that here would be a second, worse copy of Git's own precedence rules.
+        const first = await runGit(["pull", ...target], { cwd: repo.root, timeoutMs: COMMAND_TIMEOUT_MS });
+        if (first.ok || !needsReconcile(first.stdout, first.stderr)) return syncOutcome("git/pull", first);
+        // Since 2.27, `git pull` with no strategy configured is a hard fatal on a
+        // diverged branch — so the one command a refused push tells you to run
+        // could not run at all. Answer that one question, once, by merging: it is
+        // what `git pull` did before 2.27 and what IDEA's "Update Project" does
+        // by default, and it is the recoverable answer, because a merge that stops
+        // on conflicts lands in the Changes list where this plugin can finish or
+        // abort it. Every other failure is reported as it came.
+        const retry = await runGit(["pull", "--no-rebase", ...target], { cwd: repo.root, timeoutMs: COMMAND_TIMEOUT_MS });
+        return syncOutcome("git/pull", retry);
+      });
+    }
+
+    /**
+     * Leave an unfinished merge/rebase/cherry-pick, or move it along.
+     *
+     * This exists because the plugin's own Pull can stop on conflicts: without
+     * it, the plugin could put a repository into a state it had no way to leave
+     * — resolving every conflict by hand, and even then needing a terminal to
+     * continue a rebase.
+     */
+    case "git/sequencer": {
+      const operation = String(payload.operation ?? "");
+      const action = String(payload.action ?? "");
+      if (!SEQUENCER.has(operation)) return { ok: false, message: `Unknown operation: ${operation || "(none)"}` };
+      if (action !== "abort" && action !== "continue") {
+        return { ok: false, message: `Unknown action: ${action || "(none)"}` };
+      }
+      // A merge is finished by committing it, which the commit button already
+      // does; only the sequencer commands have a `--continue` of their own.
+      if (action === "continue" && operation === "merge") {
+        return { ok: false, message: "A merge is finished by committing it." };
+      }
+      return withRepo(async (repo) => {
+        // `--continue` will open an editor for the commit message. There is no
+        // terminal here and stdin is closed, so Git could only fail; setting the
+        // editor to `true` accepts the message the operation already recorded,
+        // which is what pressing Continue means.
+        const prefix = action === "continue" ? ["-c", "core.editor=true"] : [];
+        const result = await runGit([...prefix, operation, `--${action}`], { cwd: repo.root });
         return {
           ok: result.ok,
           stdout: result.stdout,
-          stderr: result.stderr,
           message: result.ok ? undefined : result.message,
-          // Machine-readable so the views can phrase it in the user's language.
-          authHint: result.ok ? undefined : authHint(result.stderr),
+          detail: gitDetail(result.stdout, result.stderr),
         };
       });
     }

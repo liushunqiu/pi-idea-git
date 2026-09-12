@@ -40,6 +40,17 @@
     { id: "untracked", label: "unversioned", status: "?" },
   ];
 
+  /**
+   * The banner line for an unfinished operation, by the name the engine reports.
+   * Only these four can be in progress: they are the ones `git/sequencer` accepts.
+   */
+  const OPERATION_KEYS = {
+    merge: "mergeInProgress",
+    rebase: "rebaseInProgress",
+    "cherry-pick": "cherryPickInProgress",
+    revert: "revertInProgress",
+  };
+
   const STATUS_VARS = {
     A: "added", M: "modified", D: "deleted", R: "renamed", C: "renamed",
     T: "modified", "?": "unversioned", U: "conflict", "!": "ignored",
@@ -255,7 +266,10 @@
       items.push({ type: "separator" });
       items.push({
         label: t("fetch"),
-        onSelect: async () => report(await invoke("git/fetch"), t("fetch")),
+        onSelect: async () => {
+          report(await invoke("git/fetch"), t("fetch"));
+          ctx.onChanged?.();
+        },
       });
       items.push({
         label: t("pull"),
@@ -268,12 +282,39 @@
       items.push({
         label: t("push"),
         onSelect: async () => {
-          const result = await invoke("git/push", {
-            remote: "origin",
-            branch: branch?.head,
-            setUpstream: !branch?.upstream,
-          });
+          // No remote/branch: the engine pushes where the branch actually
+          // tracks. Sending `origin` plus the local name pushed a new branch to
+          // `origin` for anything tracking elsewhere, while the ↑/↓ chip kept
+          // counting against the real upstream.
+          const result = await invoke("git/push", { setUpstream: !branch?.upstream });
           report(result, t("push"));
+          // A refusal means the remote moved on, so the chip is stale exactly
+          // when it matters most.
+          await PIG.refreshTrackingRefs(result);
+          ctx.onChanged?.();
+        },
+      });
+      items.push({
+        label: t("forcePush"),
+        // A lease needs a baseline to compare against, so it is only offered
+        // once the branch has an upstream at all.
+        disabled: !branch?.upstream,
+        onSelect: async () => {
+          const confirmed = await dialog({
+            title: t("forcePushTitle"),
+            message: PIG.tf("forcePushBody", {
+              // The remote and the branch it holds: `{{branch}}` is the local
+              // name, because "origin/feature/x on origin" says it twice.
+              branch: branch?.head ?? "",
+              remote: String(branch?.upstream ?? "").split("/")[0],
+            }),
+            confirmLabel: t("forcePush"),
+            danger: true,
+          });
+          if (confirmed === null) return;
+          const result = await invoke("git/push", { forceWithLease: true });
+          report(result, t("forcePush"));
+          await PIG.refreshTrackingRefs(result);
           ctx.onChanged?.();
         },
       });
@@ -328,13 +369,13 @@
     };
   }
 
+  /**
+   * The one report path for both tool windows. `PIG.reportSync` keeps the
+   * boolean contract this file has always used at its call sites, so a caller
+   * can still write `if (report(...)) await refresh()`.
+   */
   function report(result, action) {
-    if (result?.ok) {
-      if (result.stdout?.trim()) toast(`${action}: ${firstLine(result.stdout)}`, "info");
-      return true;
-    }
-    toast(`${action}: ${PIG.errorText(result)}`, "error");
-    return false;
+    return PIG.reportSync(result, action);
   }
 
   function firstLine(value) {
@@ -424,13 +465,12 @@
         if (report(result, t("fetch"))) await refresh();
       }));
       toolbar.append(iconButton("push", t("push"), async () => {
-        const branch = state.repo?.branch;
-        const result = await invoke("git/push", {
-          remote: "origin",
-          branch: branch?.head,
-          setUpstream: !branch?.upstream,
-        });
+        // The engine resolves the target from the branch's own upstream; see
+        // the push item in the branch menu.
+        const result = await invoke("git/push", { setUpstream: !state.repo?.branch?.upstream });
         report(result, t("push"));
+        await PIG.refreshTrackingRefs(result);
+        await refresh();
       }));
       toolbar.append(h("div", { class: "toolbar-separator" }));
       toolbar.append(iconButton("plus", tip("stageFile", KEYS.stage), () => stageSelected(true), { disabled: !canStageSelected() }));
@@ -879,6 +919,12 @@
       if (state.diff) state.diff.parsed = result;
     }
 
+    /**
+     * The commit area's status line. A conflicted repository is the one state
+     * this line has to do more than describe: an unresolved merge/rebase/cherry
+     * pick can only be left by finishing it or by aborting, and the plugin's own
+     * Pull can produce one, so the escape has to be here and not in a terminal.
+     */
     function paintCommit() {
       commitButton.disabled = state.busy || (!state.message.trim() && !state.amend);
       const staged = state.repo?.staged?.length ?? 0;
@@ -887,8 +933,18 @@
         + (state.repo?.untracked?.length ?? 0)
         + (state.repo?.conflicted?.length ?? 0);
       const conflicts = state.repo?.conflicted?.length ?? 0;
+      const operation = state.repo?.operation ?? null;
       PIG.clear(summary);
-      if (conflicts) {
+      if (operation) {
+        summary.className = "commit-summary warn";
+        summary.append(h("span", { text: t(`${OPERATION_KEYS[operation] ?? "conflictNotice"}`) }));
+        // A merge is finished by committing, so it has no "continue"; the
+        // sequencer operations do.
+        if (operation !== "merge") {
+          summary.append(operationButton(t("continueOperation"), operation, "continue"));
+        }
+        summary.append(operationButton(t("abortOperation"), operation, "abort"));
+      } else if (conflicts) {
         summary.className = "commit-summary warn";
         summary.append(t("conflictNotice"));
       } else if (!staged && !state.amend) {
@@ -900,6 +956,20 @@
           ? `将提交 ${staged} / ${total} 个文件`
           : `${staged} of ${total} file${total === 1 ? "" : "s"} will be committed`);
       }
+    }
+
+    function operationButton(label, operation, action) {
+      return h("button", {
+        class: "bordered",
+        type: "button",
+        style: { marginLeft: "8px" },
+        text: label,
+        onclick: async () => {
+          const result = await invoke("git/sequencer", { operation, action });
+          report(result, label);
+          await refresh();
+        },
+      });
     }
 
     /**
@@ -1252,13 +1322,9 @@
       toast(firstLine(result.stdout) || t("commit"), "info");
 
       if (withPush) {
-        const branch = state.repo?.branch;
-        const pushed = await invoke("git/push", {
-          remote: "origin",
-          branch: branch?.head,
-          setUpstream: !branch?.upstream,
-        });
+        const pushed = await invoke("git/push", { setUpstream: !state.repo?.branch?.upstream });
         report(pushed, t("push"));
+        await PIG.refreshTrackingRefs(pushed);
       }
       await refresh();
     }

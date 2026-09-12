@@ -1161,6 +1161,55 @@ textarea {
   animation: toast-in 140ms ease-out;
 }
 
+/* Git's own output is multi-line, and collapsing it into one paragraph is how
+   "CONFLICT (content): Merge conflict in f.txt" ends up reading as part of a
+   sentence. */
+.toast {
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+/* An error toast that has more of Git's output behind it: the toast itself is
+   the target, and this is the label that says so. */
+.toast.clickable {
+  pointer-events: auto;
+}
+
+.toast-link {
+  display: block;
+  margin-top: 6px;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--button-primary-bg);
+  font: inherit;
+  text-decoration: underline;
+  cursor: pointer;
+}
+
+.toast.clickable .toast-link:hover {
+  color: var(--fg);
+}
+
+/* The full output behind a "Show details" link. `.banner-detail` is scoped to
+   the conflict banner, so a dialog outside one had no styling at all — and a
+   4000-character block with no bound would run past the bottom of the window. */
+.dialog-detail {
+  margin-top: 8px;
+  max-height: 45vh;
+  overflow: auto;
+  padding: 6px 8px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--input-bg);
+  color: var(--fg-secondary);
+  font-family: var(--mono-font);
+  font-size: 11px;
+  line-height: 1.45;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
 .toast.error {
   border-left-color: var(--status-conflict);
 }

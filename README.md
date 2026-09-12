@@ -35,7 +35,7 @@ workflow.
 | `Include into commit` per hunk | Commit → diff pane | **Partial commit.** Each hunk carries a checkbox; toggling it runs `git apply --cached` (or `-R`) with a rebuilt patch, so only the chosen hunks enter the commit |
 | `Stage Hunk` / `Discard Hunk` | Commit → diff pane | Hover a hunk header on a worktree diff |
 | `Show Diff`, `Rollback`, `Add`/`Remove from index`, `Open File`, `Reveal in File Manager`, `Copy path` | Commit → file context menu | `Rollback` confirms first; it deletes untracked files and restores tracked ones |
-| Branch widget (`main ↑2 ↓1`) | both toolbars | Branch, ahead/behind, and a popup with local/remote branches, `New Branch`, `Checkout`, `Fetch`, `Pull`, `Push`, `Stash Changes`, and the stash list |
+| Branch widget (`main ↑2 ↓1`) | both toolbars | Branch, ahead/behind, and a popup with local/remote branches, `New Branch`, `Checkout`, `Fetch`, `Pull`, `Push`, `Force Push (with lease)`, `Stash Changes`, and the stash list |
 | `Log`, `Console` | Git → tabs | Console shows every command the plugin ran, with output, failures in red, and `Clear All` |
 | Commit graph | Git → Log | Lanes computed from parent information; the branch tip is yellow, local branches green, remote violet, tags grey |
 | `Branches` pane | Git → Log → left | `Local branches` / `Remote branches`, checkout on click, actions on right-click |
@@ -214,6 +214,76 @@ along with what to do about it:
 | No stored credential (HTTPS) | run `git push` once in a terminal so the credential helper stores it, then retry |
 | `Permission denied (publickey)` | use an HTTPS remote, or make the key work without `ssh-agent` — the host passes no `SSH_AUTH_SOCK`, so agent-held keys cannot be unlocked. On macOS, `UseKeychain yes` in `~/.ssh/config` is enough |
 
+### When the remote moved on
+
+A refused push is the ordinary case, not an exception: someone else pushed to
+the same branch. Git says so on stderr and names the remedy in `hint:` lines,
+and both are now read — the short message is Git's own lines, and the classified
+remedy above them is the plugin's:
+
+| Failure | What the plugin says |
+| --- | --- |
+| push refused (`fetch first`, `non-fast-forward`, `stale info`) | the remote has commits you do not have — Fetch, then Pull, then push again, or Force Push if the local history is the one to keep |
+| push refused (`protected branch`, hooks) | the server refused it; the branch is probably protected |
+| pull stopped on conflicts | resolve them in the Changes list, then commit |
+| diverged branches with `pull.ff = only` | merge or rebase, then push |
+
+Git's own output is longer than a toast, so the toast links to it: **Show
+details** opens the untrimmed stderr *and* stdout of the failed command,
+`hint:` lines included.
+
+Three engine decisions hold this together:
+
+- **Both streams, always.** `git push` reports the rejection on stderr, but
+  `git merge` — and therefore the second half of `git pull` — reports
+  `CONFLICT` on stdout. Reading only stderr turned a conflicted pull into a
+  message that read like a successful fetch log.
+- **`git pull` runs as configured, and is retried only when Git refuses for
+  want of a strategy.** Since 2.27, plain `git pull` on a diverged branch is a
+  hard `fatal: Need to specify how to reconcile divergent branches` — so the one
+  command a refused push tells you to run could not run at all. That single
+  failure is answered by retrying with `--no-rebase` (merge); every other
+  outcome is Git's. Nothing re-derives the strategy here, which is how
+  `branch.<name>.rebase`, `pull.rebase = merges|interactive` and
+  `pull.ff = only` keep working — they are consulted by the attempt that runs
+  first, not by a second, worse copy of Git's precedence rules.
+- **Force push is a lease, never a bare force.** `--force-with-lease` is the
+  only force the plugin can send: it is refused if the remote is no longer
+  where this window last saw it, so a colleague's push is never erased. The
+  remote and the ref are positional arguments, so they are checked before they
+  are handed to Git — `git push origin --force` is exactly what an unchecked
+  `-`-prefixed value would produce.
+
+A **push goes where the branch tracks**, not to `origin` plus the local name.
+Those agree only until a branch tracks something else — at which point the old
+behaviour pushed a new branch to `origin` while the ↑/↓ chip kept counting
+against the real upstream. With no upstream at all the fallback stays narrow:
+`origin`, or the one remote when there is only one. With several remotes and no
+upstream there is nothing to infer from, so the push is refused with the list
+instead of publishing the branch to whichever name sorts first.
+
+### Leaving an unfinished merge
+
+A conflicted `pull` leaves the repository mid-merge, so the status line above
+the commit button names the operation in progress and carries its exits:
+**Abort** for any of the four, **Continue** for the sequencer ones (`git merge
+--continue` does not exist; a merge is finished by committing it). Continue
+runs with `core.editor=true`, because there is no terminal to compose a message
+in and Git would otherwise only fail — the message the operation already
+recorded is used.
+
+The line keeps the operation named **after the conflicts are staged**, which is
+the point: resolving a conflict turns its `u` line into an ordinary index line,
+so porcelain stops mentioning it — and staging everything is exactly when
+`--continue` starts being able to succeed. Gating the check on "there are
+conflicts" hid the only way out of the state the plugin itself can create, so
+the probe runs while there are conflicts *or* while it found an operation a
+moment ago.
+
+An operation that is not recognised is not run: the engine only accepts the
+four names it can report, so a malformed payload cannot become an arbitrary
+`git` verb.
+
 ### Setup recipes
 
 **GitHub, HTTPS** — `gh auth login` then `gh auth setup-git` writes the helper
@@ -349,6 +419,31 @@ env -i PATH="$PATH" TMPDIR="${TMPDIR:-/tmp}" node tools/drive.mjs . git/repo
 
 That is how the engine's push path was verified against a real HTTPS remote
 without a credential prompt.
+
+### Testing the sync paths
+
+`tools/harness.mjs` drives the engine against real repositories built on the
+spot — a bare remote, two clones, a genuine divergence — and asserts the
+behaviours a refusal depends on: the classification, the message, the details,
+the stale-then-fetched ahead/behind chip, the conflicted merge and its exits,
+where a push lands (and is refused to land), and that a stale lease never
+overwrites a colleague's work.
+
+```bash
+node tools/harness.mjs        # 75 assertions, all against real git
+```
+
+### Looking at a view without a host
+
+`tools/smoke.mjs` writes the built view with a stubbed `window.pluginBridge`
+into `.smoke/`, so a state that is awkward to produce on demand (a repository
+mid-merge, a push the remote refuses) can be rendered and inspected:
+
+```bash
+node tools/build.mjs && node tools/smoke.mjs commit zh-CN
+```
+
+The stub lives in the tool, not in the plugin, and `.smoke/` is gitignored.
 
 > **Widening `permissions` needs a longer path than the reload button.**
 > Saving triggers a hot reload that refuses a manifest asking for more than the

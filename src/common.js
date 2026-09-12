@@ -178,6 +178,25 @@
       includeFolder: "Include this folder into commit",
       unincludeFolder: "Exclude this folder from commit",
       repositoryHint: "Open a folder that is inside a Git repository.",
+      remoteAhead: "The remote branch has commits you do not have. Fetch, then Pull, and push again — or, if the local history is the one to keep, use Force Push from the branch menu.",
+      pushRejected: "The server refused the push — the branch is probably protected, or a hook rejected it.",
+      pullDiverged: "Local and remote have diverged. Merge or rebase, then push.",
+      // Not "then commit": a pull that rebases (the user's own `pull.rebase`)
+      // stops on conflicts too, and there the finish is Continue. The status
+      // line above the commit button knows which one it is; this only has to
+      // send the user there.
+      pullConflicts: "The pull stopped on conflicts — resolve them in the Changes list, then finish it there.",
+      mergeInProgress: "Merging — resolve the conflicts, then commit to finish.",
+      rebaseInProgress: "Rebasing — resolve the conflicts, then continue.",
+      cherryPickInProgress: "Cherry-picking — resolve the conflicts, then continue.",
+      revertInProgress: "Reverting — resolve the conflicts, then continue.",
+      abortOperation: "Abort",
+      continueOperation: "Continue",
+      forcePush: "Force Push (with lease)",
+      forcePushTitle: "Overwrite the remote branch?",
+      forcePushBody: "This rewrites {{branch}} on {{remote}}: commits that are there and not here are dropped. The lease means it only runs while the remote is still where this window last saw it, so a push from someone else is refused instead of erased.",
+      gitOutput: "Git output",
+      showDetail: "Show details",
     },
     "zh-CN": {
       commit: "提交",
@@ -343,6 +362,21 @@
       compactMiddleDirs: "折叠中间目录",
       collapseAll: "全部折叠",
       repositoryHint: "请打开一个位于 Git 仓库内的文件夹。",
+      remoteAhead: "远端分支上有你还没有的提交。请先 Fetch，再 Pull，然后重新推送；若要以本地历史为准，用分支菜单里的「强制推送」。",
+      pushRejected: "服务端拒绝了这次推送 — 分支可能受保护，或被钩子拦下。",
+      pullDiverged: "本地与远端已分叉：请先合并或变基，再推送。",
+      pullConflicts: "拉取因冲突停下 — 请在变更列表里解决冲突，然后在那里收尾。",
+      mergeInProgress: "合并进行中 — 解决冲突后提交即可完成",
+      rebaseInProgress: "变基进行中 — 解决冲突后点「继续」",
+      cherryPickInProgress: "拣选进行中 — 解决冲突后点「继续」",
+      revertInProgress: "还原进行中 — 解决冲突后点「继续」",
+      abortOperation: "中止",
+      continueOperation: "继续",
+      forcePush: "强制推送（with lease）",
+      forcePushTitle: "覆盖远端分支？",
+      forcePushBody: "这会把 {{remote}} 上的 {{branch}} 重写为本地提交：只存在于远端的提交将被丢弃。lease 的含义是只有远端仍停在本窗口上次看到的位置时才执行，因此他人的推送会被拒绝，而不是被覆盖。",
+      gitOutput: "Git 输出",
+      showDetail: "查看详情",
     },
   };
 
@@ -591,16 +625,25 @@
   // -------------------------------------------------------------- toasts ---
   let toastLayer = null;
 
+  /**
+   * A transient message. Returns the node so a caller can add to it — the sync
+   * errors append a link to the full Git output.
+   *
+   * Long messages are the norm now (Git's own words, then a remedy), and error
+   * toasts have to be read before they can be acted on, so they get longer.
+   */
   function toast(message, level) {
     const text = String(message ?? "").trim();
-    if (!text) return;
+    if (!text) return null;
     if (!toastLayer) {
       toastLayer = h("div", { class: "toast-layer" });
       document.body.append(toastLayer);
     }
-    const node = h("div", { class: `toast ${level === "error" ? "error" : "info"}`, role: "status" }, [text]);
+    const important = level === "error";
+    const node = h("div", { class: `toast ${important ? "error" : "info"}`, role: "status" }, [text]);
     toastLayer.append(node);
-    window.setTimeout(() => node.remove(), level === "error" ? 7000 : 3600);
+    window.setTimeout(() => node.remove(), important ? 12_000 : 3600);
+    return node;
   }
 
   // -------------------------------------------------------------- popups ---
@@ -734,10 +777,14 @@
       }, [
         h("div", { style: { fontWeight: "600", marginBottom: "6px" }, text: title ?? "" }),
         message ? h("div", { text: message }) : null,
-        detail ? h("div", { class: "banner-detail", text: detail }) : null,
+        detail ? h("div", { class: "dialog-detail", text: detail }) : null,
         field,
         h("div", { style: { display: "flex", justifyContent: "flex-end", gap: "8px", marginTop: "14px" } }, [
-          h("button", { class: "bordered", type: "button", onclick: () => close(null) }, [cancelLabel ?? t("cancel")]),
+          // `cancelLabel: null` means "nothing to cancel" — a read-only dialog
+          // (the full Git output) has one button, not two.
+          cancelLabel === null
+            ? null
+            : h("button", { class: "bordered", type: "button", onclick: () => close(null) }, [cancelLabel ?? t("cancel")]),
           confirm,
         ]),
       ]);
@@ -754,17 +801,82 @@
 
   /**
    * The message to show for a failed call: Git's own output plus, when the
-   * engine recognised the failure, a line saying what to do about it. Auth
-   * failures are the ones a user cannot guess their way out of.
+   * engine recognised the failure, a line saying what to do about it.
+   *
+   * The recognised ones are the failures a user cannot guess their way out of:
+   * credentials, and the two ways a push or a pull comes back refused. The
+   * engine returns a code and never prose, so the wording lives here, in the
+   * language the rest of the window is in.
    */
   function errorText(result) {
     const message = String(result?.message ?? "").trim();
-    const hint = result?.authHint === "ssh" ? t("authSsh")
-      : result?.authHint === "credentials" ? t("authCredentials")
-        : "";
-    if (!hint) return message || "failed";
-    return message ? `${message}\n\n${hint}` : hint;
+    const remedy = remedyText(result);
+    if (!remedy) return message || "failed";
+    return message ? `${message}\n\n${remedy}` : remedy;
   }
+
+  /** The classified remedy for a failed call, or "" when there is nothing to add. */
+  function remedyText(result) {
+    if (result?.authHint === "ssh") return t("authSsh");
+    if (result?.authHint === "credentials") return t("authCredentials");
+    if (result?.pushHint === "remote-ahead") return t("remoteAhead");
+    if (result?.pushHint === "remote-rejected") return t("pushRejected");
+    if (result?.pullHint === "diverged") return t("pullDiverged");
+    if (result?.pullHint === "conflicts") return t("pullConflicts");
+    return "";
+  }
+
+  /**
+   * Report a fetch/pull/push.
+   *
+   * Two things made this its own function rather than a `toast` at each call
+   * site. A successful push prints nothing on stdout — Git's summary goes to
+   * stderr — so "show stdout if there is any" made pushing succeed silently.
+   * And a refused push produces six lines of Git in a 340px toast, which is why
+   * the error toast now carries a link to the whole of Git's output.
+   */
+  function reportSync(result, action) {
+    if (result?.ok) {
+      const line = String(result.stdout ?? "").split("\n").map((value) => value.trim()).find(Boolean);
+      toast(line ? `${action}: ${line}` : action, "info");
+      return true;
+    }
+    const node = toast(`${action}: ${errorText(result)}`, "error");
+    if (node && result?.detail) {
+      node.classList.add("clickable");
+      node.append(h("button", {
+        class: "toast-link",
+        type: "button",
+        onclick: () => dialog({
+          title: t("gitOutput"),
+          detail: result.detail,
+          confirmLabel: t("close"),
+          cancelLabel: null,
+        }),
+      }, [t("showDetail")]));
+    }
+    return false;
+  }
+
+  /**
+   * A refused push means the remote moved on, so the ↑/↓ chip is stale by
+   * definition: it is counting against a remote-tracking ref that predates the
+   * refusal. Fetch before the view redraws, or the chip keeps claiming "1
+   * outgoing, 0 incoming" right after Git said the opposite.
+   *
+   * A fetch that fails here is deliberately not reported: the refusal the user
+   * has to act on is already on screen, and a second message about the refresh
+   * would be noise on top of it. The consequence is only that the chip stays
+   * stale, which is where it started.
+   */
+  async function refreshTrackingRefs(result) {
+    if (result?.pushHint !== "remote-ahead") return result;
+    // `invoke` resolves with `{ok:false}` rather than throwing, so there is
+    // nothing to catch — the result is read and dropped on purpose.
+    await invoke("git/fetch");
+    return result;
+  }
+
 
   // ------------------------------------------------------------ splitter ---
   /**
@@ -960,6 +1072,9 @@
     formatShortcut,
     bindShortcuts,
     errorText,
+    remedyText,
+    reportSync,
+    refreshTrackingRefs,
     appShortcutHintBinding,
   });
 })(window.PIG || (window.PIG = {}));

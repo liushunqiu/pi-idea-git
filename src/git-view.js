@@ -461,16 +461,22 @@
         {
           label: t("push"),
           onSelect: async () => {
-            const result = await invoke("git/push", {
-              remote: "origin",
-              branch: state.repo?.branch?.head,
-              setUpstream: !state.repo?.branch?.upstream,
-            });
-            toast(result.ok ? t("push") : result.message, result.ok ? "info" : "error");
+            // No remote/branch: this menu belongs to the Log, where the item is
+            // about the checked-out branch. The engine pushes where that branch
+            // tracks instead of assuming `origin`.
+            const result = await invoke("git/push", { setUpstream: !state.repo?.branch?.upstream });
+            PIG.reportSync(result, t("push"));
+            await PIG.refreshTrackingRefs(result);
             await refresh();
           },
         },
-        { label: t("fetch"), onSelect: async () => { await invoke("git/fetch"); await refresh(); } },
+        {
+          label: t("fetch"),
+          onSelect: async () => {
+            PIG.reportSync(await invoke("git/fetch"), t("fetch"));
+            await refresh();
+          },
+        },
       ];
     }
 
