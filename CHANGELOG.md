@@ -1,6 +1,6 @@
  # Changelog
 
- ## Unreleased
+ ## 0.3.0 — 2026-09-14
 
  - Git 操作补齐（对标 IDEA 日志／分支面板，见
    `.agents/notes/implemented/feature/2026-09-14-git-operations-parity.md`）：
@@ -12,8 +12,10 @@
    `git/branch-delete`、`git/branch-rename`、`git/branch-upstream`、
    `git/tag-delete`、`git/tag-push`、`git/stash-show`、`git/compare`，
    `git/fetch` 支持 `prune`。harness 198 条全绿（新增 34 条行为回归）。
-- 远端分支检出改为 IDEA 行为：`git/checkout` 加 `track` 意图位，建本地跟踪分支
-  并附着 HEAD（已存在则落到本地同名分支；裸 revision 仍 detach）。harness 206 条全绿。
+ - 远端分支检出改为 IDEA 行为：`git/checkout` 加 `track` 意图位，建本地跟踪分支
+   并附着 HEAD（已存在则落到本地同名分支；裸 revision 仍 detach）。
+ - 生成提交信息改按已勾选／已暂存范围取 diff，多仓聚合一次描述，与实际提交一致；
+   日志提交者过滤支持指定人（名单按提交数排序加手输）。harness 208 条全绿。
  
 
 ## 0.2.0 — 2026-09-12

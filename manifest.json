@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "id": "io.github.liushunqiu.pi-idea-git",
   "name": "IDEA Git",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "An IntelliJ-IDEA-style Git tool window for PI-Desktop: staged/unstaged change lists, hunk-level stage & revert, commit, branch switcher, graph log and stashes. IDEA Git 风格的 Git 工具窗口：暂存/未暂存分组、按代码块暂存与还原、提交、分支切换、图形化日志与储藏。",
   "author": "liushunqiu",
   "homepage": "https://github.com/liushunqiu/pi-idea-git",
@@ -23,7 +23,7 @@
     "developer-tools",
     "productivity"
   ],
-  "changelog": "Release 0.2.0: IDEA-style Commit and Git tool windows (staged/unstaged/conflict/untracked groups, hunk stage/revert, graph log, branches, stashes, console); multi-repository and submodule aggregation with a per-repo push dialog; classified push/pull conflict remedies with lease-only force push; host-model commit-message drafting with a language menu. Published as io.github.liushunqiu.pi-idea-git (renamed from local.pi-idea-git; per-plugin prefs start fresh).",
+  "changelog": "Release 0.3.0: Git operations parity (Branches panel with HEAD/Tags/Remotes/Stashes groups and slash-folder collapsing; branch merge/rebase/rename/upstream/delete; commit copy/compare; toolbar user/date/path server-side filters, Go to HEAD, Fetch+Pull shortcuts); git/log server-side author/since/until/search/paths filters plus git/tags, git/remotes, git/merge, git/rebase and more; remote checkout creates a tracking branch (IDEA behavior); commit-message drafting follows the checked/staged scope.",
   "safetyNotes": "只读工作区文件（Open File / Reveal 走宿主 fs 接口）；丢弃未跟踪文件时会直接删除该文件（操作前有确认框），其余写操作一律走 Git 命令。生成提交信息调用宿主模型，用的是你自己的模型配置与额度（宿主限流 8 次/分），插件不持有任何 API Key，不发起网络请求，无遥测。HTTPS 凭据走你自己的 Git 凭据助手；只活在 ssh-agent 里的密钥用不了，请用 HTTPS 远端或钥匙串密钥。",
   "main": "main.js",
   "ui": {
