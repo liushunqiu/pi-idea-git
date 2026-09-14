@@ -249,7 +249,7 @@
             label: entry.name,
             title: entry.subject,
             onSelect: async () => {
-              const checkedOut = await PIG.runWithPill(t("checkingOut"), () => invoke("git/checkout", { name: entry.name, startPoint: entry.name }));
+              const checkedOut = await PIG.runWithPill(t("checkingOut"), () => invoke("git/checkout", { name: entry.name, startPoint: entry.name, track: true }));
               report(checkedOut, `${t("checkout")}: ${entry.name}`);
               ctx.onChanged?.();
             },
@@ -272,6 +272,126 @@
           ctx.onChanged?.();
         },
       });
+      // Note: 与 Git 视图同套分支操作的子集——提交视图的弹层没有右键位置，合并/变基/删除先用二级弹层选分支，改名/upstream 直接作用于当前分支 — 见 .agents/notes/implemented/feature/2026-09-14-git-operations-parity.md
+      items.push({
+        label: `${t("mergeIntoCurrent")}…`,
+        disabled: !locals.length,
+        onSelect: () => pickBranch(t("mergeIntoCurrent"), async (entry) => {
+          const confirmed = await dialog({
+            title: t("mergeTitle"),
+            message: `${entry.name} → ${branch?.head ?? t("head")}`,
+            confirmLabel: t("merge"),
+          });
+          if (!confirmed) return;
+          const result = await PIG.runWithPill(t("merge"), () => invoke("git/merge", { ref: entry.name }));
+          reportMergeRebase(result, t("merge"), entry.name, t("mergeConflicts"));
+          ctx.onChanged?.();
+        }),
+      });
+      items.push({
+        label: `${t("rebaseOnto")}…`,
+        disabled: !locals.length,
+        onSelect: () => pickBranch(t("rebaseOnto"), async (entry) => {
+          const confirmed = await dialog({
+            title: t("rebaseTitle"),
+            message: `${branch?.head ?? t("head")} → ${entry.name}`,
+            confirmLabel: t("rebase"),
+            danger: true,
+          });
+          if (!confirmed) return;
+          const result = await PIG.runWithPill(t("rebase"), () => invoke("git/rebase", { ref: entry.name }));
+          reportMergeRebase(result, t("rebase"), entry.name, t("rebaseConflicts"));
+          ctx.onChanged?.();
+        }),
+      });
+      items.push({
+        label: t("renameBranch"),
+        disabled: !branch?.head,
+        onSelect: async () => {
+          const name = await dialog({
+            title: t("renameTitle"),
+            message: branch?.head ?? "",
+            input: { value: branch?.head ?? "" },
+            confirmLabel: t("renameBranch"),
+          });
+          if (!name || name === branch?.head) return;
+          report(await invoke("git/branch-rename", { old: branch.head, new: name }), `${t("renameBranch")}: ${name}`);
+          ctx.onChanged?.();
+        },
+      });
+      items.push({
+        label: t("setUpstream"),
+        disabled: !branch?.head,
+        onSelect: async () => {
+          const upstream = await dialog({
+            title: t("setUpstreamTitle"),
+            message: branch?.head ?? "",
+            input: { value: branch?.upstream ?? "" },
+            confirmLabel: t("setUpstream"),
+          });
+          if (!upstream) return;
+          report(await invoke("git/branch-upstream", { name: branch.head, upstream }), `${t("setUpstream")}: ${upstream}`);
+          ctx.onChanged?.();
+        },
+      });
+      if (branch?.upstream) {
+        items.push({
+          label: t("unsetUpstream"),
+          onSelect: async () => {
+            report(await invoke("git/branch-upstream", { name: branch.head, unset: true }), t("unsetUpstream"));
+            ctx.onChanged?.();
+          },
+        });
+      }
+      items.push({
+        label: `${t("deleteBranch")}…`,
+        disabled: locals.filter((entry) => !entry.current).length === 0,
+        onSelect: () => pickBranch(t("deleteBranch"), async (entry) => {
+          const confirmed = await dialog({
+            title: t("deleteBranchTitle"),
+            message: entry.name,
+            confirmLabel: t("deleteBranch"),
+            danger: true,
+          });
+          if (!confirmed) return;
+          let result = await invoke("git/branch-delete", { name: entry.name });
+          if (!result.ok && /not fully merged/i.test(String(result.message ?? ""))) {
+            const force = await dialog({
+              title: t("deleteBranchTitle"),
+              message: result.message,
+              confirmLabel: t("deleteBranch"),
+              danger: true,
+            });
+            if (force) result = await invoke("git/branch-delete", { name: entry.name, force: true });
+          }
+          report(result, `${t("deleteBranch")}: ${entry.name}`);
+          ctx.onChanged?.();
+        }, true),
+      });
+      function pickBranch(title, run, excludeCurrent) {
+        popup(chip, [
+          { type: "label", label: title },
+          ...locals
+            .filter((entry) => !excludeCurrent || !entry.current)
+            .map((entry) => ({
+              label: entry.current ? `${entry.name}  ●` : entry.name,
+              title: entry.subject,
+              disabled: !excludeCurrent && entry.current,
+              onSelect: () => run(entry),
+            })),
+        ]);
+      }
+      function reportMergeRebase(result, action, name, conflictsHint) {
+        if (result?.ok) {
+          report(result, `${action}: ${name}`);
+          return;
+        }
+        const text = String(result?.message ?? "");
+        const conflicted = /CONFLICT|could not apply|Automatic merge failed|fix conflicts/i.test(
+          `${result?.stdout ?? ""}\n${result?.stderr ?? ""}\n${text}`,
+        );
+        toast(`${action}: ${text}${conflicted ? `\n\n${conflictsHint}` : ""}`, "error");
+      }
       items.push({ type: "separator" });
       items.push({
         label: t("fetch"),
@@ -349,10 +469,38 @@
         for (const stash of stashes.slice(0, 10)) {
           items.push({
             label: `${stash.ref}  ${stash.subject ?? ""}`.trim(),
-            onSelect: async () => {
-              report(await PIG.runWithPill(t("unstashing"), () => invoke("git/stash", { action: "pop", ref: stash.ref })), t("unstash"));
-              ctx.onChanged?.();
-            },
+            onSelect: () => popup(chip, [
+              { type: "label", label: `${stash.ref}  ${stash.subject ?? ""}`.trim() },
+              {
+                label: t("applyStash"),
+                onSelect: async () => {
+                  report(await PIG.runWithPill(t("unstashing"), () => invoke("git/stash", { action: "apply", ref: stash.ref })), `${t("applyStash")}: ${stash.ref}`);
+                  ctx.onChanged?.();
+                },
+              },
+              {
+                label: t("unstash"),
+                onSelect: async () => {
+                  report(await PIG.runWithPill(t("unstashing"), () => invoke("git/stash", { action: "pop", ref: stash.ref })), t("unstash"));
+                  ctx.onChanged?.();
+                },
+              },
+              { type: "separator" },
+              {
+                label: t("dropStash"),
+                onSelect: async () => {
+                  const confirmed = await dialog({
+                    title: t("dropStashConfirm"),
+                    message: `${stash.ref}  ${stash.subject ?? ""}`.trim(),
+                    confirmLabel: t("dropStash"),
+                    danger: true,
+                  });
+                  if (!confirmed) return;
+                  report(await invoke("git/stash", { action: "drop", ref: stash.ref }), `${t("dropStash")}: ${stash.ref}`);
+                  ctx.onChanged?.();
+                },
+              },
+            ]),
           });
         }
       }
@@ -1399,14 +1547,23 @@
     }
 
     /**
-     * Which change the draft should describe: the file the user picked, or
-     * everything staged when the list has no selection. Reported back to them
-     * afterwards so the scope is never a guess.
+     * Which change the draft should describe: everything checked (staged) —
+     * the same set Commit is about to commit — or, when nothing is staged,
+     * the file the user picked. Reported back afterwards so the scope is
+     * never a guess.
+     *
+     * Checked means staged here: ticking a row stages it, unticking unstages
+     * it, so `stagedTargets()` is exactly "what is checked". Selection (the
+     * highlight that drives the diff pane) used to win over that set, and the
+     * auto-select on refresh meant the staged branch was nearly unreachable —
+     * the draft then described one file while Commit took all of them.
      */
      function draftTarget() {
+       const targets = stagedTargets();
+       if (targets.length) return { kind: "staged", targets };
        if (state.selection) {
          const sel = state.selection;
-         return { path: sel.p, mode: sel.g === "staged" ? "index" : "worktree", group: sel.g, repoRoot: sel.root ?? null };
+         return { kind: "file", path: sel.p, mode: sel.g === "staged" ? "index" : "worktree", group: sel.g, repoRoot: sel.root ?? null };
        }
        return null;
      }
@@ -1427,10 +1584,26 @@
     }
 
     // Note: 界面语言只有视图知道（插件进程拿不到），所以 locale 随每次请求传；语言是 chevron 菜单里的显式选择而不是推断，auto 的历史回退靠引擎返回 null 而不是 "en" — 见 .agents/notes/implemented/architecture/2026-09-11-commit-message-prompt.md
+    // Note: 生成范围=勾选（stagedTargets）而非选中 — 见 .agents/notes/implemented/bug-fix/2026-09-14-commit-message-checked-scope.md
     async function generate() {
       if (state.generating) return;
-       const target = draftTarget();
-       const payload = target ? { path: target.path, mode: target.mode, ...(target.repoRoot ? { repoRoot: target.repoRoot } : {}) } : {};
+      const target = draftTarget();
+      // Staged (checked) wins: it is what Commit will commit. A single staged
+      // repo reuses the legacy contract (empty payload for the current repo,
+      // repoRoot for a submodule) so style comes from the repo being described.
+      // Several staged repos send their roots; the engine aggregates their
+      // index diffs into one prompt and drafts a single message for all of them.
+      let payload = {};
+      if (target?.kind === "staged") {
+        const roots = (target.targets ?? []).map((entry) => entry.root).filter(Boolean);
+        if (roots.length > 1) {
+          payload = { stagedRoots: roots };
+        } else if (roots.length === 1 && roots[0] !== (state.repo?.repo?.root ?? null)) {
+          payload = { repoRoot: roots[0] };
+        }
+      } else if (target?.kind === "file") {
+        payload = { path: target.path, mode: target.mode, ...(target.repoRoot ? { repoRoot: target.repoRoot } : {}) };
+      }
       if (state.commitModelKey) payload.modelKey = state.commitModelKey;
       // The plugin process has no idea which language this window speaks, so it
       // travels with the request: `commitLang` is the user's standing choice,
@@ -1463,12 +1636,14 @@
       paintCommit();
       messageInput.focus();
       const scope = result.scope ?? {};
-      toast(
-        scope.kind === "file"
-          ? PIG.tf("draftedFile", { file: scope.path })
-          : PIG.tf("draftedStaged"),
-        "info",
-      );
+      if (scope.kind === "file") {
+        toast(PIG.tf("draftedFile", { file: scope.path }), "info");
+      } else {
+        let note = PIG.tf("draftedStaged");
+        const repos = Number(scope.repos ?? 0) || (target?.targets?.length ?? 0);
+        if (repos > 1) note += ` · ${PIG.tf("commitMultipleRepos", { count: repos })}`;
+        toast(note, "info");
+      }
     }
 
     async function openGenerateMenu(anchor) {

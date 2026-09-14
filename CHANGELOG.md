@@ -1,4 +1,20 @@
-# Changelog
+ # Changelog
+
+ ## Unreleased
+
+ - Git 操作补齐（对标 IDEA 日志／分支面板，见
+   `.agents/notes/implemented/feature/2026-09-14-git-operations-parity.md`）：
+   Branches 面板加 HEAD 行、Tags／Remotes／Stashes 组与 `/` 文件夹折叠；
+   分支右键补合并／变基／改名／upstream／删除；提交右键补复制提交信息／与
+   HEAD 比较；工具栏补用户／日期／路径服务端过滤、Go to HEAD 与 Fetch＋Pull
+   快捷按钮；提交视图分支弹层跟随。`git/log` 支持 author／since／until／
+   search／paths；新增 `git/tags`、`git/remotes`、`git/merge`、`git/rebase`、
+   `git/branch-delete`、`git/branch-rename`、`git/branch-upstream`、
+   `git/tag-delete`、`git/tag-push`、`git/stash-show`、`git/compare`，
+   `git/fetch` 支持 `prune`。harness 198 条全绿（新增 34 条行为回归）。
+- 远端分支检出改为 IDEA 行为：`git/checkout` 加 `track` 意图位，建本地跟踪分支
+  并附着 HEAD（已存在则落到本地同名分支；裸 revision 仍 detach）。harness 206 条全绿。
+ 
 
 ## 0.2.0 — 2026-09-12
 

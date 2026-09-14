@@ -1793,7 +1793,9 @@ window.__PI_IDEA_GIT_SURFACE__ = "git";
       resetToHere: "Reset Current Branch to Here",
       editCommitMessage: "Edit Commit Message",
       copyRevisionNumber: "Copy Revision Number",
+      copyMessage: "Copy Message",
       compareWithLocal: "Compare with Local",
+      compareWithHead: "Compare with HEAD",
       showRepository: "Show Repository",
       soft: "Soft",
       mixed: "Mixed",
@@ -1802,8 +1804,36 @@ window.__PI_IDEA_GIT_SURFACE__ = "git";
       newBranch: "New Branch",
       checkout: "Checkout",
       mergeIntoCurrent: "Merge into Current",
+      merge: "Merge",
+      rebase: "Rebase",
       rebaseOnto: "Rebase Current onto Selected",
       deleteBranch: "Delete",
+      renameBranch: "Rename",
+      setUpstream: "Set Upstream",
+      unsetUpstream: "Unset Upstream",
+      copyBranchName: "Copy Branch Name",
+      pushTag: "Push Tag",
+      deleteTag: "Delete Tag",
+      showStash: "Show Stash",
+      goToHead: "Go to HEAD",
+      mineOnly: "Mine only",
+      recentUsers: "Recent committers",
+      filterUserPlaceholder: "Name or email, Enter to filter…",
+      anyTime: "Any time",
+      lastDay: "Last 24 hours",
+      lastWeek: "Last week",
+      lastMonth: "Last month",
+      prune: "Prune",
+      stashes: "Stashes",
+      remotes: "Remotes",
+      mergeTitle: "Merge into the current branch?",
+      rebaseTitle: "Rebase the current branch?",
+      deleteBranchTitle: "Delete this branch?",
+      renameTitle: "Rename branch",
+      setUpstreamTitle: "Set upstream",
+      deleteTagTitle: "Delete this tag?",
+      mergeConflicts: "The merge stopped on conflicts — resolve them in the Changes list, then commit to finish.",
+      rebaseConflicts: "The rebase stopped on conflicts — resolve them in the Changes list, then continue.",
       stash: "Stash",
       stashChanges: "Stash Changes",
       unstash: "Unstash",
@@ -1879,7 +1909,7 @@ window.__PI_IDEA_GIT_SURFACE__ = "git";
       replaceDraft: "Replace your draft?",
       replaceDraftBody: "Generating a message overwrites what you have already typed.",
       replace: "Replace",
-      draftedStaged: "Commit message drafted from everything staged",
+      draftedStaged: "Commit message drafted from checked (staged) changes",
       draftedFile: "Commit message drafted from {{file}}",
       submoduleBadge: "submodule",
       submoduleInside: "This change is inside the submodule {{path}}. The parent repository can only record which commit the submodule points at, so it cannot be committed from here. Switch to the submodule in the repository list (top left), commit there, then come back and stage it here.",
@@ -1918,7 +1948,7 @@ window.__PI_IDEA_GIT_SURFACE__ = "git";
       gitOutput: "Git output",
       showDetail: "Show details",
        commitSummary: "{{staged}} of {{total}} file{{s}} will be committed",
-       generateScope: "{{action}} · {{lang}} (uses everything staged when no file is selected)",
+       generateScope: "{{action}} · {{lang}} (uses checked/staged changes)",
        collapsedLines: "⋮ {{count}} unchanged line{{s}}",
        copyPath: "Copy Path",
        switchToRepo: "Switch to this repository",
@@ -2018,7 +2048,9 @@ window.__PI_IDEA_GIT_SURFACE__ = "git";
       resetToHere: "将当前分支重置到此处",
       editCommitMessage: "修改提交信息",
       copyRevisionNumber: "复制修订号",
+      copyMessage: "复制提交信息",
       compareWithLocal: "与本地比较",
+      compareWithHead: "与 HEAD 比较",
       showRepository: "显示仓库",
       soft: "Soft",
       mixed: "Mixed",
@@ -2027,8 +2059,36 @@ window.__PI_IDEA_GIT_SURFACE__ = "git";
       newBranch: "新建分支",
       checkout: "检出",
       mergeIntoCurrent: "合并到当前分支",
+      merge: "合并",
+      rebase: "变基",
       rebaseOnto: "将当前分支变基到此分支",
       deleteBranch: "删除",
+      renameBranch: "重命名",
+      setUpstream: "设置上游分支",
+      unsetUpstream: "取消上游关联",
+      copyBranchName: "复制分支名",
+      pushTag: "推送标签",
+      deleteTag: "删除标签",
+      showStash: "查看储藏",
+      goToHead: "回到 HEAD",
+      mineOnly: "只看我的",
+      recentUsers: "最近提交者",
+      filterUserPlaceholder: "输入姓名或邮箱，回车过滤…",
+      anyTime: "全部时间",
+      lastDay: "最近 24 小时",
+      lastWeek: "最近一周",
+      lastMonth: "最近一月",
+      prune: "清理已删除的远端分支",
+      stashes: "储藏",
+      remotes: "远端",
+      mergeTitle: "合并到当前分支？",
+      rebaseTitle: "把当前分支变基到所选分支？",
+      deleteBranchTitle: "删除该分支？",
+      renameTitle: "重命名分支",
+      setUpstreamTitle: "设置上游分支",
+      deleteTagTitle: "删除该标签？",
+      mergeConflicts: "合并因冲突停下 — 请在变更列表里解决冲突，然后提交完成。",
+      rebaseConflicts: "变基因冲突停下 — 请在变更列表里解决冲突，然后点「继续」。",
       stash: "储藏",
       stashChanges: "储藏更改",
       unstash: "取消储藏",
@@ -2103,7 +2163,7 @@ window.__PI_IDEA_GIT_SURFACE__ = "git";
       replaceDraft: "替换当前草稿？",
       replaceDraftBody: "生成会覆盖你已经输入的内容。",
       replace: "替换",
-      draftedStaged: "已生成提交信息（来源：全部已暂存内容）",
+      draftedStaged: "已生成提交信息（来源：已勾选/已暂存内容）",
       draftedFile: "已生成提交信息（来源：{{file}}）",
       submoduleBadge: "子模块",
       submoduleInside: "这个改动在子模块 {{path}} 内部。父仓库只能记录子模块指向哪个提交，无法从这里把它提交掉。请在左上角的仓库列表里切换到该子模块，在里面提交，再回到这里暂存。",
@@ -2139,7 +2199,7 @@ window.__PI_IDEA_GIT_SURFACE__ = "git";
       gitOutput: "Git 输出",
       showDetail: "查看详情",
        commitSummary: "将提交 {{staged}} / {{total}} 个文件",
-       generateScope: "{{action}} · {{lang}}（未选中文件时使用全部已暂存内容）",
+       generateScope: "{{action}} · {{lang}}（基于已勾选/已暂存内容）",
        collapsedLines: "⋮ {{count}} 行未修改",
        copyPath: "复制路径",
       switchToRepo: "切换到该仓库",
@@ -4068,7 +4128,7 @@ function markSubmodule(hunk) {
             label: entry.name,
             title: entry.subject,
             onSelect: async () => {
-              const checkedOut = await PIG.runWithPill(t("checkingOut"), () => invoke("git/checkout", { name: entry.name, startPoint: entry.name }));
+              const checkedOut = await PIG.runWithPill(t("checkingOut"), () => invoke("git/checkout", { name: entry.name, startPoint: entry.name, track: true }));
               report(checkedOut, `${t("checkout")}: ${entry.name}`);
               ctx.onChanged?.();
             },
@@ -4091,6 +4151,126 @@ function markSubmodule(hunk) {
           ctx.onChanged?.();
         },
       });
+      // Note: 与 Git 视图同套分支操作的子集——提交视图的弹层没有右键位置，合并/变基/删除先用二级弹层选分支，改名/upstream 直接作用于当前分支 — 见 .agents/notes/implemented/feature/2026-09-14-git-operations-parity.md
+      items.push({
+        label: `${t("mergeIntoCurrent")}…`,
+        disabled: !locals.length,
+        onSelect: () => pickBranch(t("mergeIntoCurrent"), async (entry) => {
+          const confirmed = await dialog({
+            title: t("mergeTitle"),
+            message: `${entry.name} → ${branch?.head ?? t("head")}`,
+            confirmLabel: t("merge"),
+          });
+          if (!confirmed) return;
+          const result = await PIG.runWithPill(t("merge"), () => invoke("git/merge", { ref: entry.name }));
+          reportMergeRebase(result, t("merge"), entry.name, t("mergeConflicts"));
+          ctx.onChanged?.();
+        }),
+      });
+      items.push({
+        label: `${t("rebaseOnto")}…`,
+        disabled: !locals.length,
+        onSelect: () => pickBranch(t("rebaseOnto"), async (entry) => {
+          const confirmed = await dialog({
+            title: t("rebaseTitle"),
+            message: `${branch?.head ?? t("head")} → ${entry.name}`,
+            confirmLabel: t("rebase"),
+            danger: true,
+          });
+          if (!confirmed) return;
+          const result = await PIG.runWithPill(t("rebase"), () => invoke("git/rebase", { ref: entry.name }));
+          reportMergeRebase(result, t("rebase"), entry.name, t("rebaseConflicts"));
+          ctx.onChanged?.();
+        }),
+      });
+      items.push({
+        label: t("renameBranch"),
+        disabled: !branch?.head,
+        onSelect: async () => {
+          const name = await dialog({
+            title: t("renameTitle"),
+            message: branch?.head ?? "",
+            input: { value: branch?.head ?? "" },
+            confirmLabel: t("renameBranch"),
+          });
+          if (!name || name === branch?.head) return;
+          report(await invoke("git/branch-rename", { old: branch.head, new: name }), `${t("renameBranch")}: ${name}`);
+          ctx.onChanged?.();
+        },
+      });
+      items.push({
+        label: t("setUpstream"),
+        disabled: !branch?.head,
+        onSelect: async () => {
+          const upstream = await dialog({
+            title: t("setUpstreamTitle"),
+            message: branch?.head ?? "",
+            input: { value: branch?.upstream ?? "" },
+            confirmLabel: t("setUpstream"),
+          });
+          if (!upstream) return;
+          report(await invoke("git/branch-upstream", { name: branch.head, upstream }), `${t("setUpstream")}: ${upstream}`);
+          ctx.onChanged?.();
+        },
+      });
+      if (branch?.upstream) {
+        items.push({
+          label: t("unsetUpstream"),
+          onSelect: async () => {
+            report(await invoke("git/branch-upstream", { name: branch.head, unset: true }), t("unsetUpstream"));
+            ctx.onChanged?.();
+          },
+        });
+      }
+      items.push({
+        label: `${t("deleteBranch")}…`,
+        disabled: locals.filter((entry) => !entry.current).length === 0,
+        onSelect: () => pickBranch(t("deleteBranch"), async (entry) => {
+          const confirmed = await dialog({
+            title: t("deleteBranchTitle"),
+            message: entry.name,
+            confirmLabel: t("deleteBranch"),
+            danger: true,
+          });
+          if (!confirmed) return;
+          let result = await invoke("git/branch-delete", { name: entry.name });
+          if (!result.ok && /not fully merged/i.test(String(result.message ?? ""))) {
+            const force = await dialog({
+              title: t("deleteBranchTitle"),
+              message: result.message,
+              confirmLabel: t("deleteBranch"),
+              danger: true,
+            });
+            if (force) result = await invoke("git/branch-delete", { name: entry.name, force: true });
+          }
+          report(result, `${t("deleteBranch")}: ${entry.name}`);
+          ctx.onChanged?.();
+        }, true),
+      });
+      function pickBranch(title, run, excludeCurrent) {
+        popup(chip, [
+          { type: "label", label: title },
+          ...locals
+            .filter((entry) => !excludeCurrent || !entry.current)
+            .map((entry) => ({
+              label: entry.current ? `${entry.name}  ●` : entry.name,
+              title: entry.subject,
+              disabled: !excludeCurrent && entry.current,
+              onSelect: () => run(entry),
+            })),
+        ]);
+      }
+      function reportMergeRebase(result, action, name, conflictsHint) {
+        if (result?.ok) {
+          report(result, `${action}: ${name}`);
+          return;
+        }
+        const text = String(result?.message ?? "");
+        const conflicted = /CONFLICT|could not apply|Automatic merge failed|fix conflicts/i.test(
+          `${result?.stdout ?? ""}\n${result?.stderr ?? ""}\n${text}`,
+        );
+        toast(`${action}: ${text}${conflicted ? `\n\n${conflictsHint}` : ""}`, "error");
+      }
       items.push({ type: "separator" });
       items.push({
         label: t("fetch"),
@@ -4168,10 +4348,38 @@ function markSubmodule(hunk) {
         for (const stash of stashes.slice(0, 10)) {
           items.push({
             label: `${stash.ref}  ${stash.subject ?? ""}`.trim(),
-            onSelect: async () => {
-              report(await PIG.runWithPill(t("unstashing"), () => invoke("git/stash", { action: "pop", ref: stash.ref })), t("unstash"));
-              ctx.onChanged?.();
-            },
+            onSelect: () => popup(chip, [
+              { type: "label", label: `${stash.ref}  ${stash.subject ?? ""}`.trim() },
+              {
+                label: t("applyStash"),
+                onSelect: async () => {
+                  report(await PIG.runWithPill(t("unstashing"), () => invoke("git/stash", { action: "apply", ref: stash.ref })), `${t("applyStash")}: ${stash.ref}`);
+                  ctx.onChanged?.();
+                },
+              },
+              {
+                label: t("unstash"),
+                onSelect: async () => {
+                  report(await PIG.runWithPill(t("unstashing"), () => invoke("git/stash", { action: "pop", ref: stash.ref })), t("unstash"));
+                  ctx.onChanged?.();
+                },
+              },
+              { type: "separator" },
+              {
+                label: t("dropStash"),
+                onSelect: async () => {
+                  const confirmed = await dialog({
+                    title: t("dropStashConfirm"),
+                    message: `${stash.ref}  ${stash.subject ?? ""}`.trim(),
+                    confirmLabel: t("dropStash"),
+                    danger: true,
+                  });
+                  if (!confirmed) return;
+                  report(await invoke("git/stash", { action: "drop", ref: stash.ref }), `${t("dropStash")}: ${stash.ref}`);
+                  ctx.onChanged?.();
+                },
+              },
+            ]),
           });
         }
       }
@@ -5218,14 +5426,23 @@ function markSubmodule(hunk) {
     }
 
     /**
-     * Which change the draft should describe: the file the user picked, or
-     * everything staged when the list has no selection. Reported back to them
-     * afterwards so the scope is never a guess.
+     * Which change the draft should describe: everything checked (staged) —
+     * the same set Commit is about to commit — or, when nothing is staged,
+     * the file the user picked. Reported back afterwards so the scope is
+     * never a guess.
+     *
+     * Checked means staged here: ticking a row stages it, unticking unstages
+     * it, so `stagedTargets()` is exactly "what is checked". Selection (the
+     * highlight that drives the diff pane) used to win over that set, and the
+     * auto-select on refresh meant the staged branch was nearly unreachable —
+     * the draft then described one file while Commit took all of them.
      */
      function draftTarget() {
+       const targets = stagedTargets();
+       if (targets.length) return { kind: "staged", targets };
        if (state.selection) {
          const sel = state.selection;
-         return { path: sel.p, mode: sel.g === "staged" ? "index" : "worktree", group: sel.g, repoRoot: sel.root ?? null };
+         return { kind: "file", path: sel.p, mode: sel.g === "staged" ? "index" : "worktree", group: sel.g, repoRoot: sel.root ?? null };
        }
        return null;
      }
@@ -5246,10 +5463,26 @@ function markSubmodule(hunk) {
     }
 
     // Note: 界面语言只有视图知道（插件进程拿不到），所以 locale 随每次请求传；语言是 chevron 菜单里的显式选择而不是推断，auto 的历史回退靠引擎返回 null 而不是 "en" — 见 .agents/notes/implemented/architecture/2026-09-11-commit-message-prompt.md
+    // Note: 生成范围=勾选（stagedTargets）而非选中 — 见 .agents/notes/implemented/bug-fix/2026-09-14-commit-message-checked-scope.md
     async function generate() {
       if (state.generating) return;
-       const target = draftTarget();
-       const payload = target ? { path: target.path, mode: target.mode, ...(target.repoRoot ? { repoRoot: target.repoRoot } : {}) } : {};
+      const target = draftTarget();
+      // Staged (checked) wins: it is what Commit will commit. A single staged
+      // repo reuses the legacy contract (empty payload for the current repo,
+      // repoRoot for a submodule) so style comes from the repo being described.
+      // Several staged repos send their roots; the engine aggregates their
+      // index diffs into one prompt and drafts a single message for all of them.
+      let payload = {};
+      if (target?.kind === "staged") {
+        const roots = (target.targets ?? []).map((entry) => entry.root).filter(Boolean);
+        if (roots.length > 1) {
+          payload = { stagedRoots: roots };
+        } else if (roots.length === 1 && roots[0] !== (state.repo?.repo?.root ?? null)) {
+          payload = { repoRoot: roots[0] };
+        }
+      } else if (target?.kind === "file") {
+        payload = { path: target.path, mode: target.mode, ...(target.repoRoot ? { repoRoot: target.repoRoot } : {}) };
+      }
       if (state.commitModelKey) payload.modelKey = state.commitModelKey;
       // The plugin process has no idea which language this window speaks, so it
       // travels with the request: `commitLang` is the user's standing choice,
@@ -5282,12 +5515,14 @@ function markSubmodule(hunk) {
       paintCommit();
       messageInput.focus();
       const scope = result.scope ?? {};
-      toast(
-        scope.kind === "file"
-          ? PIG.tf("draftedFile", { file: scope.path })
-          : PIG.tf("draftedStaged"),
-        "info",
-      );
+      if (scope.kind === "file") {
+        toast(PIG.tf("draftedFile", { file: scope.path }), "info");
+      } else {
+        let note = PIG.tf("draftedStaged");
+        const repos = Number(scope.repos ?? 0) || (target?.targets?.length ?? 0);
+        if (repos > 1) note += ` · ${PIG.tf("commitMultipleRepos", { count: repos })}`;
+        toast(note, "info");
+      }
     }
 
     async function openGenerateMenu(anchor) {
@@ -6116,12 +6351,18 @@ function markSubmodule(hunk) {
       error: null,
       repoPath: null,
       branches: [],
+      tags: [],
+      remotes: [],
+      stashes: [],
       selection: null,
       changedFiles: [],
       details: null,
       search: "",
       branchFilter: "",
       pathFilter: "",
+      userFilter: "",
+      sinceFilter: "",
+      collapsed: Object.create(null),
       showGraph: true,
       firstParent: false,
       noMerges: false,
@@ -6129,10 +6370,13 @@ function markSubmodule(hunk) {
       showBranches: true,
       showDetails: true,
       detailHeight: 46,
-      // What the toolbar is waiting on (null | "refresh" | "push"): the active
-      // button spins, the other goes disabled.
+      // What the toolbar is waiting on (null | "refresh" | "push" | "fetch" | "pull"): the active
+      // button spins, the others go disabled.
       syncing: null,
     };
+    // Path-filter reloads are debounced: each keystroke is cheap locally but a
+    // `git log` process is not.
+    let pathTimer = null;
 
     const toolbar = h("div", { class: "toolbar" });
     let searchButton = null;
@@ -6163,6 +6407,103 @@ function markSubmodule(hunk) {
     const commitsPane = h("div", { class: "commits-pane" });
     const splitter = h("div", { class: "splitter-y" });
     const panes = h("div", { class: "log-panes" });
+
+    /** 按钮文案："" → 全部，"me" → 只看我的，具名 → 名字本身。 */
+    function userFilterLabel() {
+      if (state.userFilter === "me") return t("mineOnly");
+      return state.userFilter || t("all");
+    }
+
+    function userFilterButton() {
+      const button = PIG.textButton(
+        `${t("filterByUser")}: ${userFilterLabel()}`,
+        state.userFilter && state.userFilter !== "me"
+          ? `${t("filterByUser")}: ${state.userFilter}`
+          : t("filterByUser"),
+        (event) => openUserFilterMenu(event.currentTarget),
+        { class: "bordered user-filter" },
+      );
+      // 选中的名字可能很长：截断保住工具栏，其余分支/日期按钮不动。
+      button.style.maxWidth = "240px";
+      button.style.overflow = "hidden";
+      button.style.textOverflow = "ellipsis";
+      button.style.whiteSpace = "nowrap";
+      return button;
+    }
+
+    /**
+     * 切过滤先重画工具栏再拉日志：按钮文案本身就是选中态的反馈，
+     * 只调 loadLog 的话文案会停在旧值直到下次整刷（分支/日期按钮同病，
+     * 但那是既有行为不在本次范围）。
+     */
+    function applyUserFilter(value) {
+      state.userFilter = value;
+      paintToolbar();
+      loadLog();
+    }
+
+
+    /**
+     * IDEA 式的提交者菜单：全部 / 只看我的 / 最近提交者（带提交数）/ 手输。
+     * 名单来自 `git/authors`（近 2000 条提交聚合，取前 20）；手输按名字或
+     * 邮箱走服务端 `--author` 过滤，回车即用，名单之外的人也能滤。
+     */
+    async function openUserFilterMenu(anchor) {
+      let authors = [];
+      try {
+        const result = await invoke("git/authors", { limit: 20 });
+        if (result?.ok) authors = result.authors ?? [];
+      } catch {
+        authors = [];
+      }
+      // 工具栏每次刷新都会重建按钮，await 期间按钮可能已被替换——按标记类
+      // 找回活的按钮，找不到才放弃（下次点击自然有活锚点）。
+      const live = anchor?.isConnected ? anchor : toolbar.querySelector(".user-filter");
+      if (!live) return;
+      const listed = authors.filter((entry) => entry?.name);
+      const items = [
+        { type: "label", label: t("filterByUser") },
+        { label: t("all"), checked: !state.userFilter, onSelect: () => applyUserFilter("") },
+        {
+          label: t("mineOnly"),
+          title: state.repo?.user ? `${t("mineOnly")} — ${state.repo.user}` : t("mineOnly"),
+          checked: state.userFilter === "me",
+          onSelect: () => applyUserFilter("me"),
+        },
+      ];
+      if (listed.length || (state.userFilter && state.userFilter !== "me")) {
+        items.push({ type: "separator" }, { type: "label", label: t("recentUsers") });
+        // 当前手输值不在名单里时单独给一行带勾，避免“选了却看不见选中态”。
+        if (state.userFilter && state.userFilter !== "me" && !listed.some((entry) => entry.name === state.userFilter)) {
+          items.push({ label: state.userFilter, checked: true, onSelect: () => applyUserFilter(state.userFilter) });
+        }
+        for (const entry of listed) {
+          items.push({
+            label: entry.name,
+            shortcut: entry.count > 1 ? `${entry.count}` : undefined,
+            title: entry.email ? `${entry.name} <${entry.email}>` : entry.name,
+            checked: state.userFilter === entry.name,
+            onSelect: () => applyUserFilter(entry.name),
+          });
+        }
+      }
+      const field = h("input", {
+        type: "text",
+        value: state.userFilter && state.userFilter !== "me" ? state.userFilter : "",
+        placeholder: t("filterUserPlaceholder"),
+      });
+      field.addEventListener("keydown", (keyEvent) => {
+        if (keyEvent.key !== "Enter") return;
+        PIG.closePopup();
+        applyUserFilter(field.value.trim());
+      });
+      items.push({ type: "separator" }, { type: "custom", node: field });
+      try {
+        popup(live, items, { focus: true });
+      } catch {
+        // 解析与打开之间工具栏又重建了：这次放弃，下次点击即是活锚点。
+      }
+    }
 
     function paintToolbar() {
       PIG.clear(toolbar);
@@ -6202,6 +6543,40 @@ function markSubmodule(hunk) {
           paintToolbar();
         }
       }));
+      toolbar.append(syncButton("fetch", t("fetch"), "fetch", async () => {
+        if (state.syncing) return;
+        state.syncing = "fetch";
+        paintToolbar();
+        try {
+          PIG.reportSync(await PIG.runWithPill(t("fetching"), () => invoke("git/fetch")), t("fetch"));
+          await refresh();
+        } finally {
+          state.syncing = null;
+          paintToolbar();
+        }
+      }));
+      toolbar.append(syncButton("arrowDown", t("pull"), "pull", async () => {
+        if (state.syncing) return;
+        state.syncing = "pull";
+        paintToolbar();
+        try {
+          const result = await PIG.runWithPill(t("pulling"), () => invoke("git/pull"));
+          PIG.reportSync(result, t("pull"));
+          await refresh();
+        } finally {
+          state.syncing = null;
+          paintToolbar();
+        }
+      }));
+      toolbar.append(iconButton("arrowUp", t("goToHead"), (event) => {
+        const head = state.repo?.branch?.oid;
+        if (!head) return;
+        select(head).then(() => {
+          const node = listHost.querySelector(".log-row.current-branch");
+          node?.scrollIntoView({ block: "center" });
+          node?.focus();
+        }).catch(() => {});
+      }));
       // Held in a variable so the Find shortcut can open the same popup.
       searchButton = iconButton("search", tip("search", KEYS.find), (event) => {
         const field = h("input", { type: "text", value: state.search, placeholder: t("search") });
@@ -6220,9 +6595,35 @@ function markSubmodule(hunk) {
           })),
         ]);
       }));
-      toolbar.append(iconButton("file", t("filterByPaths"), (event) => {
+      // Note: 提交者过滤抄 IDEA 的三段式——全部 / 只看我的 / 最近提交者名单 + 手输（名字或邮箱回车即滤），"me" 按仓库自身 user.name 解析所以跟仓走，具名作者是仓相关的、切仓时丢掉 — 见 .agents/notes/implemented/feature/2026-09-14-git-log-user-filter.md
+      toolbar.append(userFilterButton());
+      toolbar.append(PIG.textButton(
+        `${t("date")}: ${state.sinceFilter === "day" ? t("lastDay") : state.sinceFilter === "week" ? t("lastWeek") : state.sinceFilter === "month" ? t("lastMonth") : t("anyTime")}`,
+        t("date"),
+        (event) => {
+          popup(event.currentTarget, [
+            { type: "label", label: t("date") },
+            { label: t("anyTime"), checked: !state.sinceFilter, onSelect: () => { state.sinceFilter = ""; loadLog(); } },
+            { label: t("lastDay"), checked: state.sinceFilter === "day", onSelect: () => { state.sinceFilter = "day"; loadLog(); } },
+            { label: t("lastWeek"), checked: state.sinceFilter === "week", onSelect: () => { state.sinceFilter = "week"; loadLog(); } },
+            { label: t("lastMonth"), checked: state.sinceFilter === "month", onSelect: () => { state.sinceFilter = "month"; loadLog(); } },
+          ]);
+        },
+      ));
+      toolbar.append(iconButton("file", state.pathFilter || t("filterByPaths"), (event) => {
         const field = h("input", { type: "text", value: state.pathFilter, placeholder: "src/…" });
-        field.addEventListener("input", () => { state.pathFilter = field.value; paintList(); });
+        field.addEventListener("input", () => {
+          state.pathFilter = field.value;
+          if (pathTimer !== null) window.clearTimeout(pathTimer);
+          // Note: 路径过滤走服务端 `git log -- <path>` 而非本地隐藏行——本地过滤会把有路径的提交也藏掉，且与分支/用户过滤语义不一致 — 见 .agents/notes/implemented/feature/2026-09-14-git-operations-parity.md
+          pathTimer = window.setTimeout(() => { pathTimer = null; loadLog(); }, 450);
+        });
+        field.addEventListener("keydown", (keyEvent) => {
+          if (keyEvent.key === "Enter") {
+            if (pathTimer !== null) { window.clearTimeout(pathTimer); pathTimer = null; }
+            loadLog();
+          }
+        });
         popup(event.currentTarget, [
           { type: "label", label: t("filterByPaths") },
           { type: "custom", node: field },
@@ -6336,47 +6737,335 @@ function markSubmodule(hunk) {
 
     function paintBranches() {
       PIG.clear(branchesHost);
-      const groups = [
-        { label: t("localBranches"), items: state.branches.filter((branch) => !branch.remote) },
-        { label: t("remoteBranches"), items: state.branches.filter((branch) => branch.remote) },
-      ];
       if (!state.showBranches) return;
-      for (const group of groups) {
-        if (!group.items.length) continue;
-        branchesHost.append(h("div", { class: "group-header" }, [
-          h("span", { text: group.label }),
-          h("span", { class: "count", text: `${group.items.length}` }),
-        ]));
-        for (const branch of group.items) {
-          branchesHost.append(h("div", {
-            class: "tree-row",
-            tabindex: "0",
-            title: branch.subject,
-            onclick: () => checkout(branch),
-            oncontextmenu: (event) => {
-              event.preventDefault();
-              popup(event.currentTarget, branchActions(branch));
-            },
-          }, [
-            h("span", { class: "indent", style: { width: "8px" } }),
-            branch.current
-              ? h("span", { class: "status-cell", style: { color: "var(--graph-head)" }, text: "●" })
-              : h("span", { class: "indent", style: { width: "12px" } }),
-            h("span", { class: "name", text: branch.name }),
-          ]));
+      paintHeadRow();
+      paintBranchGroup(t("localBranches"), state.branches.filter((branch) => !branch.remote), "local");
+      paintBranchGroup(t("remoteBranches"), state.branches.filter((branch) => branch.remote), "remote");
+      paintTagGroup();
+      paintRemoteGroup();
+      paintStashGroup();
+    }
+
+    /** IDEA pins HEAD above Local — the revision the window is standing on. */
+    function paintHeadRow() {
+      const branch = state.repo?.branch;
+      if (!branch) return;
+      const name = branch.head ?? (branch.detached ? `detached @ ${String(branch.oid ?? "").slice(0, 8)}` : t("head"));
+      branchesHost.append(h("div", {
+        class: "tree-row",
+        tabindex: "0",
+        title: `${t("head")}: ${name}`,
+        onclick: () => {
+          if (branch.oid) select(branch.oid).catch(() => {});
+        },
+        oncontextmenu: (event) => {
+          event.preventDefault();
+          const head = state.commits.find((commit) => commit.hash === branch.oid);
+          if (head) commitContextMenu(event.currentTarget, head);
+        },
+      }, [
+        h("span", { class: "status-cell", style: { color: "var(--graph-head)" }, text: "◆" }),
+        h("span", { class: "name", text: `HEAD (${name})` }),
+      ]));
+    }
+
+    /** IDEA folds `feature/*` into one expandable node — same here, per group. */
+    function folderOf(remote, name) {
+      const parts = String(name).split("/");
+      if (parts.length < 2) return "";
+      return remote ? parts[0] : parts.slice(0, -1).join("/");
+    }
+
+    function leafOf(remote, name) {
+      const parts = String(name).split("/");
+      if (parts.length < 2) return name;
+      return remote ? parts.slice(1).join("/") : parts[parts.length - 1];
+    }
+
+    function paintBranchGroup(label, items, key) {
+      if (!items.length) return;
+      branchesHost.append(h("div", { class: "group-header" }, [
+        h("span", { text: label }),
+        h("span", { class: "count", text: `${items.length}` }),
+      ]));
+      const folders = new Map();
+      const loose = [];
+      for (const branch of items) {
+        const folder = folderOf(branch.remote, branch.name);
+        if (folder) {
+          if (!folders.has(folder)) folders.set(folder, []);
+          folders.get(folder).push(branch);
+        } else {
+          loose.push(branch);
         }
       }
+      for (const folder of [...folders.keys()].sort((a, b) => a.localeCompare(b))) {
+        const id = `${key}:${folder}`;
+        const collapsed = Boolean(state.collapsed[id]);
+        const rows = folders.get(folder);
+        const header = h("div", {
+          class: "tree-row",
+          tabindex: "0",
+          title: folder,
+          onclick: () => { state.collapsed[id] = !state.collapsed[id]; paintBranches(); },
+        }, [
+          h("span", { class: "indent", style: { width: "8px" } }),
+          icon(collapsed ? "chevronRight" : "chevronDown", 12),
+          icon("folder", 13),
+          h("span", { class: "name", text: folder }),
+          h("span", { class: "count", text: `${rows.length}` }),
+        ]);
+        header.addEventListener("keydown", (event) => {
+          if (event.key === "Enter" || event.key === " ") {
+            event.preventDefault();
+            state.collapsed[id] = !state.collapsed[id];
+            paintBranches();
+          }
+        });
+        branchesHost.append(header);
+        if (collapsed) continue;
+        for (const branch of rows) branchesHost.append(branchRow(branch, leafOf(branch.remote, branch.name), 24));
+      }
+      for (const branch of loose) branchesHost.append(branchRow(branch, branch.name, 8));
+    }
+
+    function branchRow(branch, leaf, indent) {
+      const row = h("div", {
+        class: "tree-row",
+        tabindex: "0",
+        title: `${branch.name}${branch.upstream ? ` → ${branch.upstream}` : ""}${branch.subject ? `\n${branch.subject}` : ""}`,
+        onclick: () => checkout(branch),
+        oncontextmenu: (event) => {
+          event.preventDefault();
+          popup(event.currentTarget, branchActions(branch));
+        },
+      }, [
+        h("span", { class: "indent", style: { width: `${indent}px` } }),
+        branch.current
+          ? h("span", { class: "status-cell", style: { color: "var(--graph-head)" }, text: "●" })
+          : h("span", { class: "indent", style: { width: "12px" } }),
+        h("span", { class: "name", text: leaf, title: branch.name }),
+      ]);
+      row.addEventListener("keydown", (event) => {
+        if (event.key === "Enter" || event.key === " ") {
+          event.preventDefault();
+          checkout(branch);
+        }
+      });
+      return row;
+    }
+
+    function paintTagGroup() {
+      if (!state.tags.length) return;
+      branchesHost.append(h("div", { class: "group-header" }, [
+        h("span", { text: t("tags") }),
+        h("span", { class: "count", text: `${state.tags.length}` }),
+      ]));
+      for (const tag of state.tags) {
+        const active = state.branchFilter === tag.name;
+        const row = h("div", {
+          class: "tree-row",
+          tabindex: "0",
+          title: `${tag.name}${tag.subject ? `\n${tag.subject}` : ""}`,
+          onclick: () => {
+            state.branchFilter = active ? "" : tag.name;
+            loadLog();
+          },
+          oncontextmenu: (event) => {
+            event.preventDefault();
+            popup(event.currentTarget, tagActions(tag));
+          },
+        }, [
+          h("span", { class: "indent", style: { width: "8px" } }),
+          active
+            ? h("span", { class: "status-cell", style: { color: "var(--graph-head)" }, text: "●" })
+            : icon("tag", 12),
+          h("span", { class: "name", text: tag.name }),
+          tag.short ? h("span", { class: "path", text: tag.short }) : null,
+        ]);
+        branchesHost.append(row);
+      }
+    }
+
+    function paintRemoteGroup() {
+      if (!state.remotes.length) return;
+      branchesHost.append(h("div", { class: "group-header" }, [
+        h("span", { text: t("remotes") }),
+        h("span", { class: "count", text: `${state.remotes.length}` }),
+      ]));
+      for (const remote of state.remotes) {
+        const url = remote.fetch ?? remote.push ?? "";
+        const row = h("div", {
+          class: "tree-row",
+          tabindex: "0",
+          title: url || remote.name,
+          onclick: (event) => popup(event.currentTarget, remoteActions(remote)),
+          oncontextmenu: (event) => {
+            event.preventDefault();
+            popup(event.currentTarget, remoteActions(remote));
+          },
+        }, [
+          h("span", { class: "indent", style: { width: "8px" } }),
+          icon("branch", 12),
+          h("span", { class: "name", text: remote.name }),
+          url ? h("span", { class: "path", text: url }) : null,
+        ]);
+        branchesHost.append(row);
+      }
+    }
+
+    function paintStashGroup() {
+      if (!state.stashes.length) return;
+      branchesHost.append(h("div", { class: "group-header" }, [
+        h("span", { text: t("stashes") }),
+        h("span", { class: "count", text: `${state.stashes.length}` }),
+      ]));
+      for (const stash of state.stashes) {
+        const row = h("div", {
+          class: "tree-row",
+          tabindex: "0",
+          title: `${stash.ref}${stash.subject ? `\n${stash.subject}` : ""}`,
+          onclick: () => showStashDiff(stash),
+          oncontextmenu: (event) => {
+            event.preventDefault();
+            popup(event.currentTarget, stashActions(stash));
+          },
+        }, [
+          h("span", { class: "indent", style: { width: "8px" } }),
+          h("span", { class: "status-cell", text: "≡" }),
+          h("span", { class: "name", text: stash.subject || stash.ref }),
+          h("span", { class: "path", text: PIG.relativeTime(stash.timestamp) }),
+        ]);
+        branchesHost.append(row);
+      }
+    }
+
+    async function showStashDiff(stash) {
+      const result = await invoke("git/stash-show", { ref: stash.ref });
+      if (!result.ok) {
+        toast(PIG.errorText(result), "error");
+        return;
+      }
+      if (!String(result.text ?? "").trim()) {
+        toast(t("noDiff"), "info");
+        return;
+      }
+      openDiffOverlay(`${stash.ref} ${stash.subject ?? ""}`.trim(), result.text);
+    }
+
+    function tagActions(tag) {
+      return [
+        {
+          label: t("newBranchFromHere"),
+          onSelect: async () => {
+            const name = await dialog({
+              title: t("newBranchFromHere"),
+              message: `${t("newBranch")} @ ${tag.name}`,
+              input: { value: "" },
+              confirmLabel: t("newBranch"),
+            });
+            if (!name) return;
+            const result = await PIG.runWithPill(t("checkingOut"), () => invoke("git/checkout", { name, create: true, startPoint: tag.name }));
+            toast(result.ok ? `${t("newBranch")}: ${name}` : result.message, result.ok ? "info" : "error");
+            await refresh();
+          },
+        },
+        {
+          label: t("pushTag"),
+          onSelect: async () => {
+            const result = await PIG.runWithPill(t("pushing"), () => invoke("git/tag-push", { name: tag.name }));
+            PIG.reportSync(result, t("pushTag"));
+            await refresh();
+          },
+        },
+        { label: t("copy"), onSelect: () => PIG.copyText(tag.name) },
+        { type: "separator" },
+        {
+          label: t("deleteTag"),
+          onSelect: async () => {
+            const confirmed = await dialog({
+              title: t("deleteTagTitle"),
+              message: tag.name,
+              confirmLabel: t("deleteTag"),
+              danger: true,
+            });
+            if (!confirmed) return;
+            const result = await invoke("git/tag-delete", { name: tag.name });
+            toast(result.ok ? `${t("deleteTag")}: ${tag.name}` : result.message, result.ok ? "info" : "error");
+            await refresh();
+          },
+        },
+      ];
+    }
+
+    function remoteActions(remote) {
+      return [
+        {
+          label: t("fetch"),
+          onSelect: async () => {
+            PIG.reportSync(await PIG.runWithPill(t("fetching"), () => invoke("git/fetch", { remote: remote.name })), t("fetch"));
+            await refresh();
+          },
+        },
+        {
+          label: `${t("fetch")} (${t("prune")})`,
+          onSelect: async () => {
+            PIG.reportSync(await PIG.runWithPill(t("fetching"), () => invoke("git/fetch", { remote: remote.name, prune: true })), t("fetch"));
+            await refresh();
+          },
+        },
+        { label: t("copy"), onSelect: () => PIG.copyText(remote.fetch ?? remote.push ?? remote.name) },
+      ];
+    }
+
+    function stashActions(stash) {
+      return [
+        { label: t("showStash"), onSelect: () => showStashDiff(stash) },
+        {
+          label: t("applyStash"),
+          onSelect: async () => {
+            const result = await PIG.runWithPill(t("unstashing"), () => invoke("git/stash", { action: "apply", ref: stash.ref }));
+            toast(result.ok ? `${t("applyStash")}: ${stash.ref}` : result.message, result.ok ? "info" : "error");
+            await refresh();
+          },
+        },
+        {
+          label: t("unstash"),
+          onSelect: async () => {
+            const result = await PIG.runWithPill(t("unstashing"), () => invoke("git/stash", { action: "pop", ref: stash.ref }));
+            toast(result.ok ? `${t("unstash")}: ${stash.ref}` : result.message, result.ok ? "info" : "error");
+            await refresh();
+          },
+        },
+        { type: "separator" },
+        {
+          label: t("dropStash"),
+          onSelect: async () => {
+            const confirmed = await dialog({
+              title: t("dropStashConfirm"),
+              message: `${stash.ref}  ${stash.subject ?? ""}`.trim(),
+              confirmLabel: t("dropStash"),
+              danger: true,
+            });
+            if (!confirmed) return;
+            const result = await invoke("git/stash", { action: "drop", ref: stash.ref });
+            toast(result.ok ? `${t("dropStash")}: ${stash.ref}` : result.message, result.ok ? "info" : "error");
+            await refresh();
+          },
+        },
+      ];
     }
 
     async function checkout(branch) {
       if (branch.current) return;
-      const result = await PIG.runWithPill(t("checkingOut"), () => invoke("git/checkout", { name: branch.name, startPoint: branch.remote ? branch.name : undefined }));
+      const result = await PIG.runWithPill(t("checkingOut"), () => invoke("git/checkout", { name: branch.name, startPoint: branch.remote ? branch.name : undefined, track: branch.remote ? true : undefined }));
       toast(result.ok ? `${t("checkout")}: ${branch.name}` : result.message, result.ok ? "info" : "error");
       await refresh();
     }
 
     function branchActions(branch) {
-      return [
+      // Note: 死文案接活——mergeIntoCurrent/rebaseOnto/deleteBranch 的 key 早就存在但零引用，本次把菜单真正挂上去 — 见 .agents/notes/implemented/feature/2026-09-14-git-operations-parity.md
+      const items = [
         { label: t("checkout"), disabled: branch.current, onSelect: () => checkout(branch) },
         {
           label: t("newBranchFromHere"),
@@ -6393,6 +7082,126 @@ function markSubmodule(hunk) {
             await refresh();
           },
         },
+        { type: "separator" },
+        {
+          label: t("mergeIntoCurrent"),
+          disabled: branch.current,
+          onSelect: async () => {
+            const confirmed = await dialog({
+              title: t("mergeTitle"),
+              message: `${branch.name} → ${state.repo?.branch?.head ?? t("head")}`,
+              confirmLabel: t("merge"),
+            });
+            if (!confirmed) return;
+            const result = await PIG.runWithPill(t("merge"), () => invoke("git/merge", { ref: branch.name }));
+            if (result.ok) {
+              toast(`${t("merge")}: ${branch.name}`, "info");
+            } else {
+              const text = String(result.message ?? "");
+              const conflicted = /CONFLICT|Automatic merge failed|fix conflicts/i.test(`${result.stdout ?? ""}\n${result.stderr ?? ""}\n${text}`);
+              toast(`${t("merge")}: ${text}${conflicted ? `\n\n${t("mergeConflicts")}` : ""}`, "error");
+            }
+            await refresh();
+          },
+        },
+        {
+          label: t("rebaseOnto"),
+          disabled: branch.current,
+          onSelect: async () => {
+            const confirmed = await dialog({
+              title: t("rebaseTitle"),
+              message: `${state.repo?.branch?.head ?? t("head")} → ${branch.name}`,
+              confirmLabel: t("rebase"),
+              danger: true,
+            });
+            if (!confirmed) return;
+            const result = await PIG.runWithPill(t("rebase"), () => invoke("git/rebase", { ref: branch.name }));
+            if (result.ok) {
+              toast(`${t("rebase")}: ${branch.name}`, "info");
+            } else {
+              const text = String(result.message ?? "");
+              const conflicted = /CONFLICT|could not apply|fix conflicts/i.test(`${result.stdout ?? ""}\n${result.stderr ?? ""}\n${text}`);
+              toast(`${t("rebase")}: ${text}${conflicted ? `\n\n${t("rebaseConflicts")}` : ""}`, "error");
+            }
+            await refresh();
+          },
+        },
+        { type: "separator" },
+      ];
+      if (!branch.remote) {
+        items.push(
+          {
+            label: t("renameBranch"),
+            onSelect: async () => {
+              const name = await dialog({
+                title: t("renameTitle"),
+                message: branch.name,
+                input: { value: branch.name },
+                confirmLabel: t("renameBranch"),
+              });
+              if (!name || name === branch.name) return;
+              const result = await invoke("git/branch-rename", { old: branch.name, new: name });
+              toast(result.ok ? `${t("renameBranch")}: ${name}` : result.message, result.ok ? "info" : "error");
+              await refresh();
+            },
+          },
+          {
+            label: t("setUpstream"),
+            onSelect: async () => {
+              const upstream = await dialog({
+                title: t("setUpstreamTitle"),
+                message: branch.name,
+                input: { value: branch.upstream ?? "" },
+                confirmLabel: t("setUpstream"),
+              });
+              if (!upstream) return;
+              const result = await invoke("git/branch-upstream", { name: branch.name, upstream });
+              toast(result.ok ? `${t("setUpstream")}: ${upstream}` : result.message, result.ok ? "info" : "error");
+              await refresh();
+            },
+          },
+        );
+        if (branch.upstream) {
+          items.push({
+            label: t("unsetUpstream"),
+            onSelect: async () => {
+              const result = await invoke("git/branch-upstream", { name: branch.name, unset: true });
+              toast(result.ok ? t("unsetUpstream") : result.message, result.ok ? "info" : "error");
+              await refresh();
+            },
+          });
+        }
+      }
+      items.push(
+        {
+          label: t("deleteBranch"),
+          disabled: branch.current,
+          onSelect: async () => {
+            const confirmed = await dialog({
+              title: t("deleteBranchTitle"),
+              message: branch.remote ? `${branch.name} (${t("remoteBranches")})` : branch.name,
+              confirmLabel: t("deleteBranch"),
+              danger: true,
+            });
+            if (!confirmed) return;
+            const payload = branch.remote
+              ? { name: branch.name, remote: branch.name.split("/")[0] }
+              : { name: branch.name };
+            let result = await invoke("git/branch-delete", payload);
+            if (!result.ok && /not fully merged/i.test(String(result.message ?? ""))) {
+              const force = await dialog({
+                title: t("deleteBranchTitle"),
+                message: result.message,
+                confirmLabel: t("deleteBranch"),
+                danger: true,
+              });
+              if (force) result = await invoke("git/branch-delete", { ...payload, force: true });
+            }
+            toast(result.ok ? `${t("deleteBranch")}: ${branch.name}` : result.message, result.ok ? "info" : "error");
+            await refresh();
+          },
+        },
+        { label: t("copyBranchName"), onSelect: () => PIG.copyText(branch.name) },
         { type: "separator" },
         {
           label: t("push"),
@@ -6413,7 +7222,8 @@ function markSubmodule(hunk) {
             await refresh();
           },
         },
-      ];
+      );
+      return items;
     }
 
     function paintDetail() {
@@ -6490,6 +7300,30 @@ function markSubmodule(hunk) {
       popup(anchor, [
         { label: t("showDiff"), onSelect: () => openCommitDiff(null) },
         { label: t("copyRevisionNumber"), onSelect: () => PIG.copyText(commit.hash) },
+        {
+          label: t("copyMessage"),
+          onSelect: () => {
+            const body = state.selection === commit.hash && state.details?.hash === commit.hash
+              ? String(state.details.body ?? "").trim()
+              : "";
+            PIG.copyText(body ? `${commit.subject}\n\n${body}` : commit.subject);
+          },
+        },
+        {
+          label: t("compareWithHead"),
+          onSelect: async () => {
+            const result = await invoke("git/compare", { a: "HEAD", b: commit.hash });
+            if (!result.ok) {
+              toast(PIG.errorText(result), "error");
+              return;
+            }
+            if (!String(result.text ?? "").trim()) {
+              toast(t("noDiff"), "info");
+              return;
+            }
+            openDiffOverlay(`${t("compareWithHead")}: HEAD ↔ ${commit.short}`, result.text);
+          },
+        },
         { type: "separator" },
         {
           label: t("checkoutRevision"),
@@ -6596,12 +7430,24 @@ function markSubmodule(hunk) {
     }
 
     async function loadLog() {
+      const since = state.sinceFilter === "day" ? "1 day ago"
+        : state.sinceFilter === "week" ? "1 week ago"
+        : state.sinceFilter === "month" ? "1 month ago"
+        : undefined;
+      // Note: 具名作者直传服务端 `--author`（名字或邮箱都可），与 "me" 解析后的 user.name 走同一条路 — 见 main.js readLog
+      const author = state.userFilter === "me"
+        ? (state.repo?.user ?? undefined)
+        : (state.userFilter.trim() ? state.userFilter.trim() : undefined);
+      const paths = state.pathFilter.trim() ? [state.pathFilter.trim()] : undefined;
       const result = await invoke("git/log", {
         limit: 200,
         branch: state.branchFilter || undefined,
         firstParent: state.firstParent,
         noMerges: state.noMerges,
         topo: state.topo,
+        author,
+        since,
+        paths,
       });
       state.commits = result.commits ?? [];
       if (state.selection && !state.commits.some((commit) => commit.hash === state.selection)) {
@@ -6614,9 +7460,17 @@ function markSubmodule(hunk) {
       if (!state.selection && state.commits.length) await select(state.commits[0].hash);
     }
 
-    async function loadBranches() {
-      const result = await invoke("git/branches");
-      state.branches = result.branches ?? [];
+    async function loadRefs() {
+      const [branches, tags, remotes, stashes] = await Promise.all([
+        invoke("git/branches"),
+        invoke("git/tags"),
+        invoke("git/remotes"),
+        invoke("git/stashes"),
+      ]);
+      state.branches = branches.branches ?? [];
+      state.tags = tags.tags ?? [];
+      state.remotes = remotes.remotes ?? [];
+      state.stashes = stashes.stashes ?? [];
       paintBranches();
     }
     /**
@@ -6638,6 +7492,12 @@ function markSubmodule(hunk) {
       state.search = "";
       state.branchFilter = "";
       state.pathFilter = "";
+      // A named author belongs to the repository just left; "me" re-resolves
+      // against the new repository's own config, so only the named one is dropped.
+      if (state.userFilter && state.userFilter !== "me") state.userFilter = "";
+      state.tags = [];
+      state.remotes = [];
+      state.stashes = [];
       // A commit diff belongs to the commit it came from, and its actions name a
       // revision the new repository may not even have.
       activeDiffOverlay?.();
@@ -6667,7 +7527,7 @@ function markSubmodule(hunk) {
       state.repo = repo.ok ? repo : null;
       state.error = repo.ok ? null : (repo.message ?? t("notARepository"));
       state.repoPath = repo.ok ? null : await currentFolder();
-      await Promise.all([loadBranches(), loadLog()]);
+      await Promise.all([loadRefs(), loadLog()]);
       branchWidget.update(state.repo);
       paintToolbar();
     }

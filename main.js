@@ -883,6 +883,13 @@ function parseStyleSamples(stdout) {
 async function buildCommitContext(repo, payload) {
   const path = typeof payload?.path === "string" && payload.path.trim() ? payload.path.trim() : null;
   const mode = payload?.mode === "index" ? "index" : "worktree";
+// Note: 多仓已暂存聚合进一个 prompt（stagedRoots）— 见 .agents/notes/implemented/bug-fix/2026-09-14-commit-message-checked-scope.md
+  // Multi-repo staged draft: the Commit view commits every repo with staged
+  // files using one message, so the draft must read all of them — not just the
+  // selected repo's index (which for a parent is often only gitlink bumps).
+  const stagedRoots = Array.isArray(payload?.stagedRoots)
+    ? [...new Set((payload.stagedRoots ?? []).filter((value) => typeof value === "string" && value))]
+    : null;
 
   // The caller passes repository-relative paths; only paths that stay inside
   // the repository are accepted, the same rule the staging channels use.
@@ -908,6 +915,54 @@ async function buildCommitContext(repo, payload) {
     patch = diff.text;
     scope = { kind: "file", path, mode };
     files = [path];
+  } else if (stagedRoots && stagedRoots.length) {
+    const baseWs = repo.workspaceRoot ?? repo.workspace ?? repo.root;
+    const parts = [];
+    const aggregated = [];
+    let okRepos = 0;
+    for (const rawRoot of stagedRoots) {
+      if (!rawRoot || !isInside(baseWs, rawRoot)) continue;
+      const resolved = await resolveRepositoryRoot(rawRoot);
+      if (!resolved) continue;
+      const diff = await runGit(
+        // `--no-prefix` only trims a/ and b/ noise out of the prompt; this text is
+        // never fed back to `git apply`.
+        ["diff", "--cached", "--no-color", "--no-ext-diff", "--no-prefix", "-U3"],
+        { cwd: resolved },
+      );
+      if (!diff.ok) continue;
+      const text = diff.stdout ?? "";
+      if (!text.trim()) continue;
+      okRepos += 1;
+      let rel = null;
+      try {
+        rel = workspaceRelativeRoot(baseWs, resolved);
+      } catch {
+        rel = null;
+      }
+      if (!rel || rel === ".") {
+        rel = samePath(resolved, repo.root) ? (repo.rel ?? ".") : path.basename(resolved);
+      }
+      parts.push(rel && rel !== "." ? `=== ${rel} ===\n${text}` : text);
+      const names = await runGit(["diff", "--cached", "--name-only", "--no-color"], { cwd: resolved });
+      if (names.ok) {
+        for (const line of names.stdout.split("\n")) {
+          const name = line.trim();
+          if (!name) continue;
+          aggregated.push(rel && rel !== "." ? `${rel}/${name}` : name);
+        }
+      }
+    }
+    if (!parts.length) {
+      return {
+        ok: false,
+        code: "EMPTY_DIFF",
+        message: "Nothing is staged. Stage the change first, or select a file in the Changes list.",
+      };
+    }
+    patch = parts.join("\n");
+    scope = { kind: "staged", repos: okRepos };
+    files = [...new Set(aggregated)];
   } else {
     const diff = await runGit(
       // `--no-prefix` only trims a/ and b/ noise out of the prompt; this text is
@@ -985,7 +1040,9 @@ async function buildCommitContext(repo, payload) {
       ? `Recent commit messages from this repository:\n${samples.map((entry) => entry.subject).join("\n")}`
       : "This repository has no commit history yet.",
     "",
-    "Change to describe",
+    scope?.repos > 1
+      ? `Change to describe (${scope.repos} repositories share this one message; sections are marked === <repo> === — describe them together and name the repo for a part that belongs to only one)`
+      : "Change to describe",
     "------------------",
     "```diff",
     truncated ? patch.slice(0, MAX_PROMPT_PATCH_CHARS) : patch,
@@ -1017,8 +1074,9 @@ async function listModels() {
 }
 
 /**
- * Draft a message for the current selection, or for everything staged when
- * nothing is selected. `text` carries the draft; `message` stays what it is
+ * Draft a message for everything checked (staged) — the set Commit will commit,
+ * across repos when several have staged files — or, when nothing is staged, for
+ * the selected file. `text` carries the draft; `message` stays what it is
  * everywhere else in this file — the error text.
  */
 async function draftCommitMessage(repo, payload) {
@@ -2158,6 +2216,11 @@ async function readLog(repo, limit, options = {}) {
   const count = Math.min(Math.max(Number(limit) || 150, 1), 500);
   const format = ["%H", "%P", "%h", "%an", "%at", "%s", "%D"].join(FS_CHAR) + RS_CHAR;
   const branch = String(options.branch ?? "").trim();
+  const author = String(options.author ?? "").trim();
+  const since = String(options.since ?? "").trim();
+  const until = String(options.until ?? "").trim();
+  const search = String(options.search ?? "").trim();
+  const paths = Array.isArray(options.paths) ? options.paths.filter((v) => typeof v === "string" && v) : [];
   const args = ["log", options.topo ? "--topo-order" : "--date-order", `--max-count=${count}`];
   // Naming a branch replaces `--all`; Git rejects the two together.
   if (branch) {
@@ -2170,8 +2233,25 @@ async function readLog(repo, limit, options = {}) {
   }
   if (options.firstParent) args.push("--first-parent");
   if (options.noMerges) args.push("--no-merges");
+  // Note: 过滤条件全部拼成 `--key=value` 单参数进 Git，author 文本含空格也不拆词；since/until 只接受日期与相对口径，前导 `-` 拒绝以防 option 注入 — 见 .agents/notes/implemented/feature/2026-09-14-git-operations-parity.md
+  if (author) {
+    if (author.startsWith("-")) return { ok: false, message: "Invalid author filter." };
+    args.push(`--author=${author}`);
+  }
+  for (const [flag, value] of [["--since", since], ["--until", until]]) {
+    if (!value) continue;
+    if (value.startsWith("-") || /[\x00-\x1f\x7f]/.test(value)) return { ok: false, message: "Invalid date filter." };
+    args.push(`${flag}=${value}`);
+  }
+  if (search) {
+    if (search.startsWith("-")) return { ok: false, message: "Invalid search text." };
+    args.push(`--grep=${search}`, "--regexp-ignore-case");
+  }
   args.push(`--pretty=format:${format}`);
-
+  if (paths.length) {
+    if (!paths.every(isSafePath)) return { ok: false, message: "Unsafe path rejected." };
+    args.push("--", ...paths);
+  }
   const result = await runGit(args, { cwd: repo.root });
   if (!result.ok) {
     // A repository without commits is not an error worth shouting about.
@@ -2182,12 +2262,12 @@ async function readLog(repo, limit, options = {}) {
     .map((record) => record.replace(/^\n/, ""))
     .filter((record) => record.trim())
     .map((record) => {
-      const [hash, parents, short, author, at, subject, refs] = record.split(FS_CHAR);
+      const [hash, parents, short, commitAuthor, at, subject, refs] = record.split(FS_CHAR);
       return {
         hash,
         parents: parents ? parents.split(" ").filter(Boolean) : [],
         short,
-        author,
+        author: commitAuthor,
         timestamp: Number(at) * 1000,
         subject,
         refs: refs
@@ -2200,6 +2280,42 @@ async function readLog(repo, limit, options = {}) {
       };
     });
   return { ok: true, commits, empty: commits.length === 0 };
+}
+
+/**
+ * Distinct recent committers for the Log's User filter — IDEA shows All / Me /
+ * a user list. Aggregated from recent history (capped) rather than the whole
+ * repository, so a large repository stays fast: the list is a picker, not a
+ * census, and anything beyond it is reachable by typing the name or email
+ * (which filters server-side through `--author`).
+ * Note: 名单 capped 而手输兜底、切仓丢具名的取舍 — 见 .agents/notes/implemented/feature/2026-09-14-git-log-user-filter.md
+ */
+async function readAuthors(repo, limit) {
+  const want = Math.min(Math.max(Number(limit) || 30, 1), 100);
+  const result = await runGit(
+    ["log", "--all", "--max-count=2000", "--pretty=format:%an%x1f%ae"],
+    { cwd: repo.root },
+  );
+  // A repository without commits (or an unreadable one) simply has no
+  // committers to pick from — the filter still offers All / Mine / typing.
+  if (!result.ok) return { ok: true, authors: [] };
+  const counts = new Map();
+  for (const line of result.stdout.split("\n")) {
+    const trimmed = line.trim();
+    if (!trimmed) continue;
+    const sep = trimmed.indexOf(FS_CHAR);
+    const name = (sep < 0 ? trimmed : trimmed.slice(0, sep)).trim();
+    const email = (sep < 0 ? "" : trimmed.slice(sep + 1)).trim();
+    if (!name) continue;
+    const entry = counts.get(name) ?? { name, email: "", count: 0 };
+    if (!entry.email && email) entry.email = email;
+    entry.count += 1;
+    counts.set(name, entry);
+  }
+  const authors = [...counts.values()]
+    .sort((a, b) => b.count - a.count || a.name.localeCompare(b.name))
+    .slice(0, want);
+  return { ok: true, authors };
 }
 
 /** `%D` yields `HEAD -> main, origin/main, tag: v1`; turn that into typed chips. */
@@ -2274,6 +2390,34 @@ async function readStashes(repo) {
       return { ref, subject, timestamp: Number(at) * 1000 };
     });
   return { ok: true, stashes };
+}
+async function readTags(repo) {
+  const fields = ["%(refname:short)", "%(objectname:short)", "%(*objectname:short)", "%(creatordate:unix)", "%(contents:subject)"].join(FS_CHAR);
+  const result = await runGit(["for-each-ref", `--format=${fields}`, "refs/tags"], { cwd: repo.root });
+  if (!result.ok) return { ok: false, message: result.message };
+  const tags = result.stdout
+    .split("\n")
+    .filter((line) => line.trim())
+    .map((line) => {
+      const [name, short, target, date, subject] = line.split(FS_CHAR);
+      return { name, short, target: target || short, timestamp: Number(date) * 1000 || 0, subject: subject ?? "" };
+    });
+  tags.sort((a, b) => (b.timestamp || 0) - (a.timestamp || 0));
+  return { ok: true, tags };
+}
+
+async function readRemotes(repo) {
+  const result = await runGit(["remote", "-v"], { cwd: repo.root });
+  if (!result.ok) return { ok: false, message: result.message };
+  const byName = new Map();
+  for (const line of result.stdout.split("\n")) {
+    const match = line.trim().match(/^(\S+)\s+(\S+)\s+\((fetch|push)\)$/);
+    if (!match) continue;
+    const [, name, url, kind] = match;
+    if (!byName.has(name)) byName.set(name, { name, fetch: null, push: null });
+    byName.get(name)[kind] = url;
+  }
+  return { ok: true, remotes: [...byName.values()] };
 }
 
 // ---------------------------------------------------------------------------
@@ -2406,8 +2550,16 @@ async function onPanelInvoke(channel, payload = {}) {
           firstParent: payload.firstParent === true,
           noMerges: payload.noMerges === true,
           topo: payload.topo === true,
+          author: payload.author,
+          since: payload.since,
+          until: payload.until,
+          search: payload.search,
+          paths: payload.paths,
         }),
       );
+
+    case "git/authors":
+      return withRepo((repo) => readAuthors(repo, payload.limit));
 
     case "git/commit-diff":
       return withRepo(async (repo) => {
@@ -2442,6 +2594,12 @@ async function onPanelInvoke(channel, payload = {}) {
       const branches = await withRepo((repo) => readBranches(repo));
       return branches;
     }
+
+    case "git/tags":
+      return withRepo((repo) => readTags(repo));
+
+    case "git/remotes":
+      return withRepo((repo) => readRemotes(repo));
 
     case "git/stashes":
       return withRepo((repo) => readStashes(repo));
@@ -2573,6 +2731,35 @@ async function onPanelInvoke(channel, payload = {}) {
           return { ok: false, message: "Branch name contains invalid characters." };
         }
         if (startPoint === null) return { ok: false, message: "Invalid start point." };
+        // `track: true` means the caller picked a remote-tracking branch out of
+        // a list it already classified (the Branches pane, the branch chip):
+        // check it out the way IDEA does — a local branch tracking it — instead
+        // of detaching at it. The remote-ness is re-verified here rather than
+        // trusted, because the panel bridge forwards any channel to
+        // `onPanelInvoke`. A raw revision still takes the `--detach` path below.
+        // Note: 跟踪检出取代了原来的 detach 语义（用户要的是 IDEA 行为）——见 .agents/notes/implemented/bug-fix/2026-09-12-checkout-remote-pathspec.md
+        if (payload.track === true && !payload.create) {
+          if (!startPoint || !startPoint.includes("/") || startPoint.endsWith("/HEAD")) {
+            return { ok: false, message: "Not a remote-tracking branch." };
+          }
+          const probe = await runGit(["rev-parse", "--verify", "--quiet", `refs/remotes/${startPoint}`], { cwd: repo.root });
+          if (!probe.ok) return { ok: false, message: "Not a remote-tracking branch." };
+          const local = startPoint.slice(startPoint.indexOf("/") + 1);
+          const first = await runGit(["switch", "--track", startPoint], { cwd: repo.root });
+          if (first.ok) return { ok: true, message: undefined };
+          if (/already exists/i.test(first.message ?? "")) {
+            // The local branch is already there — it is what the click meant.
+            // Its own error (a dirty tree names the file) is the actionable
+            // one here, not the expected "already exists".
+            const existing = await runGit(["switch", local], { cwd: repo.root });
+            if (existing.ok) return { ok: true, message: undefined };
+            const existingFallback = await runGit(["checkout", local], { cwd: repo.root });
+            return { ok: existingFallback.ok, message: existingFallback.ok ? undefined : existing.message };
+          }
+          const second = await runGit(["checkout", "--track", startPoint], { cwd: repo.root });
+          // When both fail, keep the FIRST error (see below).
+          return { ok: second.ok, message: second.ok ? undefined : first.message };
+        }
         // A remote-tracking branch (or any raw revision) cannot be "switched
         // to": `switch` demands `--detach` for those, and `checkout` with two
         // positionals reads the second as a pathspec — `checkout origin/main
@@ -2617,14 +2804,153 @@ async function onPanelInvoke(channel, payload = {}) {
       const branch = refArg(payload.branch);
       if (remote === null || branch === null) return { ok: false, message: "Invalid remote or branch name." };
       const target = [remote, branch].filter(Boolean);
+      const prune = payload.prune === true;
       return withRepo(async (repo) => {
         // Prompts are disabled, so this fails fast and visibly rather than
         // hanging with no terminal to answer it.
-        const result = await runGit(["fetch", ...target], {
+        const result = await runGit(["fetch", ...(prune ? ["--prune"] : []), ...target], {
           cwd: repo.root,
           timeoutMs: COMMAND_TIMEOUT_MS,
         });
         return syncOutcome("git/fetch", result);
+      });
+    }
+
+    // Note: 分支的合并/变基/改名/删除/upstream 全部是独立通道：渲染层只传 ref 名、不拼 Git 参数，option 注入由 refArg/isBranchNameSafe 在引擎边界拦 — 见 .agents/notes/implemented/feature/2026-09-14-git-operations-parity.md
+    case "git/merge": {
+      const ref = refArg(payload.ref ?? payload.name);
+      if (ref === null) return { ok: false, message: "Invalid ref name." };
+      if (!ref) return { ok: false, message: "Branch name is required." };
+      return withRepo(async (repo) => {
+        const result = await runGit(["merge", "--no-edit", ref], { cwd: repo.root });
+        return {
+          ok: result.ok,
+          stdout: result.stdout,
+          stderr: result.stderr,
+          message: result.ok ? undefined : result.message,
+          detail: result.ok ? undefined : gitDetail(result.stdout, result.stderr),
+        };
+      });
+    }
+
+    case "git/rebase": {
+      const ref = refArg(payload.ref ?? payload.name);
+      if (ref === null) return { ok: false, message: "Invalid ref name." };
+      if (!ref) return { ok: false, message: "Branch name is required." };
+      return withRepo(async (repo) => {
+        const result = await runGit(["rebase", ref], { cwd: repo.root });
+        return {
+          ok: result.ok,
+          stdout: result.stdout,
+          stderr: result.stderr,
+          message: result.ok ? undefined : result.message,
+          detail: result.ok ? undefined : gitDetail(result.stdout, result.stderr),
+        };
+      });
+    }
+
+    case "git/branch-delete": {
+      const name = String(payload.name ?? "").trim();
+      if (!name) return { ok: false, message: "Branch name is required." };
+      if (!isBranchNameSafe(name)) return { ok: false, message: "Branch name contains invalid characters." };
+      const remote = refArg(payload.remote);
+      if (remote === null) return { ok: false, message: "Invalid remote name." };
+      return withRepo(async (repo) => {
+        if (remote) {
+          const short = name.includes("/") ? name.slice(name.indexOf("/") + 1) : name;
+          const result = await runGit(["push", remote, "--delete", short], { cwd: repo.root, timeoutMs: COMMAND_TIMEOUT_MS });
+          return syncOutcome("git/fetch", result);
+        }
+        const force = payload.force === true;
+        const result = await runGit(["branch", force ? "-D" : "-d", "--", name], { cwd: repo.root });
+        return { ok: result.ok, message: result.ok ? undefined : result.message };
+      });
+    }
+
+    case "git/branch-rename": {
+      const oldName = String(payload.old ?? payload.name ?? "").trim();
+      const newName = String(payload.new ?? payload.to ?? "").trim();
+      if (!oldName || !newName) return { ok: false, message: "Branch name is required." };
+      if (!isBranchNameSafe(oldName) || !isBranchNameSafe(newName)) {
+        return { ok: false, message: "Branch name contains invalid characters." };
+      }
+      return withRepo(async (repo) => {
+        const result = await runGit(["branch", "-m", "--", oldName, newName], { cwd: repo.root });
+        return { ok: result.ok, message: result.ok ? undefined : result.message };
+      });
+    }
+
+    case "git/branch-upstream": {
+      const name = String(payload.name ?? "").trim();
+      const upstream = refArg(payload.upstream);
+      if (upstream === null) return { ok: false, message: "Invalid upstream name." };
+      if (name && !isBranchNameSafe(name)) return { ok: false, message: "Branch name contains invalid characters." };
+      return withRepo(async (repo) => {
+        const args = payload.unset === true
+          ? ["branch", "--unset-upstream", ...(name ? [name] : [])]
+          : upstream
+            ? ["branch", `--set-upstream-to=${upstream}`, ...(name ? [name] : [])]
+            : null;
+        if (!args) return { ok: false, message: "Upstream is required." };
+        const result = await runGit(args, { cwd: repo.root });
+        return { ok: result.ok, message: result.ok ? undefined : result.message };
+      });
+    }
+
+    case "git/tag-delete": {
+      const name = String(payload.name ?? "").trim();
+      if (!name || /[\s~^:?*\[\\]/.test(name) || name.startsWith("-")) {
+        return { ok: false, message: "Invalid tag name." };
+      }
+      return withRepo(async (repo) => {
+        const result = await runGit(["tag", "-d", "--", name], { cwd: repo.root });
+        return { ok: result.ok, message: result.ok ? undefined : result.message };
+      });
+    }
+
+    case "git/tag-push": {
+      const name = String(payload.name ?? "").trim();
+      if (!name || /[\s~^:?*\[\\]/.test(name) || name.startsWith("-")) {
+        return { ok: false, message: "Invalid tag name." };
+      }
+      const remote = refArg(payload.remote);
+      if (remote === null) return { ok: false, message: "Invalid remote name." };
+      return withRepo(async (repo) => {
+        let targetRemote = remote;
+        if (!targetRemote) {
+          const remotes = await runGit(["remote"], { cwd: repo.root });
+          const names = remotes.ok ? remotes.stdout.split("\n").map((l) => l.trim()).filter(Boolean) : [];
+          if (names.includes("origin")) targetRemote = "origin";
+          else if (names.length === 1) targetRemote = names[0];
+          else if (!names.length) return { ok: false, message: "This repository has no remote to push to." };
+          else return { ok: false, message: `Several remotes (${names.join(", ")}). Choose one to push the tag to.` };
+        }
+        const result = await runGit(["push", targetRemote, "tag", "--", name], { cwd: repo.root, timeoutMs: COMMAND_TIMEOUT_MS });
+        return syncOutcome("git/push", result);
+      });
+    }
+
+    case "git/stash-show": {
+      const ref = String(payload.ref ?? "").trim();
+      if (ref && !/^stash@\{\d+\}$/.test(ref)) return { ok: false, message: "Invalid stash ref." };
+      return withRepo(async (repo) => {
+        const result = await runGit(["stash", "show", "-p", ...(ref ? [ref] : [])], { cwd: repo.root });
+        return { ok: result.ok, text: result.stdout, message: result.ok ? undefined : result.message };
+      });
+    }
+
+    case "git/compare": {
+      const a = refArg(payload.a);
+      const b = refArg(payload.b);
+      if (a === null || b === null) return { ok: false, message: "Invalid revision." };
+      if (!a || !b) return { ok: false, message: "Two revisions are required." };
+      return withRepo(async (repo) => {
+        const result = await runGit(["diff", "--no-color", "--no-ext-diff", `${a}...${b}`], { cwd: repo.root });
+        if (!result.ok || !result.stdout.trim()) {
+          const fallback = await runGit(["diff", "--no-color", "--no-ext-diff", a, b], { cwd: repo.root });
+          return { ok: fallback.ok, text: fallback.stdout, message: fallback.ok ? undefined : fallback.message };
+        }
+        return { ok: true, text: result.stdout };
       });
     }
 

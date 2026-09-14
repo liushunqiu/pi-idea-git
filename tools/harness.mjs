@@ -395,27 +395,48 @@ async function main() {
     eq("aborting a merge that is not in progress fails", missing.ok, false);
     includes("with Git's reason", missing.message, "MERGE_HEAD");
 
-    // Checking out a remote-tracking branch detaches at it. `switch` alone
+    // Checking out a remote-tracking branch with `track: true` behaves like
+    // IDEA: a local branch tracking it, not a detached HEAD. `switch` alone
     // refuses those ("a branch is expected"), and the old fallback answered
     // `checkout <startPoint> <name>` — two positionals, which Git reads as
     // tree + pathspec, so every remote checkout died with
     // `error: pathspec 'origin/main' did not match any file(s) known to git`.
-    const detached = await call(world.work, "git/checkout", { name: "origin/main", startPoint: "origin/main" });
-    eq("checking out a remote-tracking branch succeeds", detached.ok, true);
-    eq("HEAD is detached at the remote", git(world.work, ["rev-parse", "HEAD"]).trim(), git(world.work, ["rev-parse", "origin/main"]).trim());
+    // Here the local `main` already exists, so the call lands on it.
+    const tracked = await call(world.work, "git/checkout", { name: "origin/main", startPoint: "origin/main", track: true });
+    eq("checking out a remote-tracking branch succeeds", tracked.ok, true);
+    eq("HEAD is attached to the local branch", git(world.work, ["symbolic-ref", "--short", "HEAD"]).trim(), "main");
+    eq("at the remote's commit", git(world.work, ["rev-parse", "HEAD"]).trim(), git(world.work, ["rev-parse", "origin/main"]).trim());
+    eq("track of a non-remote ref is refused", (await call(world.work, "git/checkout", { name: "main", startPoint: "main", track: true })).ok, false);
+    // Without `track`, a raw revision still detaches — that path is unchanged.
+    const hash = head(world.work);
+    eq("detached checkout still succeeds", (await call(world.work, "git/checkout", { name: hash })).ok, true);
+    let attached = "";
+    try {
+      attached = git(world.work, ["symbolic-ref", "--short", "HEAD"]).trim();
+    } catch {
+      attached = "";
+    }
+    eq("a raw revision still detaches", attached, "");
     git(world.work, ["switch", "-q", "main"]);
 
-    // Move the remote on in an overlapping file, then dirty that file: the
-    // checkout is genuinely blocked, and the refusal must name the real cause
-    // instead of the fallback's pathspec complaint.
+    // Move the remote on in an overlapping file, then dirty that file and step
+    // onto another branch: switching back to `main` is genuinely blocked, and
+    // the refusal must name the real cause instead of a pathspec complaint.
+    // (Standing on `main` already would make `switch main` a no-op success.)
     git(world.other, ["fetch", "-q", "origin"]);
     git(world.other, ["reset", "-q", "--hard", "origin/main"]);
     write(world.other, "f.txt", "theirs\n");
     commitAll(world.other, "move the remote on");
     git(world.other, ["push", "-q", "origin", "main"]);
     git(world.work, ["fetch", "-q", "origin"]);
+    // Step aside first: the temporary branch commits a different `f.txt`, so
+    // switching back to `main` must overwrite the dirty file — that is what
+    // blocks. (A branch at the same commit would just carry the file along.)
+    git(world.work, ["checkout", "-qb", "temp-blocked"]);
+    write(world.work, "f.txt", "temp\n");
+    commitAll(world.work, "temp side");
     write(world.work, "f.txt", "dirty\n");
-    const blocked = await call(world.work, "git/checkout", { name: "origin/main", startPoint: "origin/main" });
+    const blocked = await call(world.work, "git/checkout", { name: "origin/main", startPoint: "origin/main", track: true });
     eq("the blocked checkout fails", blocked.ok, false);
     excludes("without the fallback's pathspec complaint", blocked.message, "pathspec");
     includes("naming the file in the way", blocked.message, "f.txt");
@@ -781,6 +802,127 @@ async function main() {
     const picked = await call(proj, "git/select-repo", { root: repoB });
     eq("switching siblings works", picked.ok && picked.active === "repoB", true);
     eq("and reads that sibling", (await call(proj, "git/repo")).repo.rel, "repoB");
+  }
+
+  // 16. Branch, tag, stash, compare and log-filter operations (IDEA parity).
+  section("branch, tag, stash and log-filter operations");
+  {
+    const world = makeWorld("ops");
+    const work = world.work;
+    git(work, ["checkout", "-qb", "feature/login"]);
+    write(work, "login.txt", "login\n");
+    commitAll(work, "login work");
+    git(work, ["checkout", "-q", "main"]);
+    write(work, "main-side.txt", "main\n");
+    commitAll(work, "main side work");
+
+    const merged = await call(work, "git/merge", { ref: "feature/login" });
+    eq("merge succeeds", merged.ok, true);
+    eq("merge lands in the history", subject(work).startsWith("Merge"), true);
+
+    git(work, ["checkout", "-qb", "topic"]);
+    write(work, "topic.txt", "t\n");
+    commitAll(work, "topic work");
+    const rebased = await call(work, "git/rebase", { ref: "main" });
+    eq("rebase succeeds", rebased.ok, true);
+    git(work, ["checkout", "-q", "main"]);
+
+    const renamed = await call(work, "git/branch-rename", { old: "topic", new: "topic2" });
+    eq("rename succeeds", renamed.ok, true);
+    eq("the new name resolves", git(work, ["rev-parse", "--verify", "topic2"]).trim().length > 0, true);
+
+    const setUpstream = await call(work, "git/branch-upstream", { name: "topic2", upstream: "origin/main" });
+    eq("set-upstream succeeds", setUpstream.ok, true);
+    eq(
+      "the upstream is recorded",
+      git(work, ["for-each-ref", "--format=%(upstream:short)", "refs/heads/topic2"]).trim(),
+      "origin/main",
+    );
+    const unsetUpstream = await call(work, "git/branch-upstream", { name: "topic2", unset: true });
+    eq("unset-upstream succeeds", unsetUpstream.ok, true);
+
+    const delRefused = await call(work, "git/branch-delete", { name: "topic2" });
+    eq("deleting an unmerged branch is refused", delRefused.ok, false);
+    const delForced = await call(work, "git/branch-delete", { name: "topic2", force: true });
+    eq("force delete succeeds", delForced.ok, true);
+
+    const evilMerge = await call(work, "git/merge", { ref: "--upload-pack=evil" });
+    eq("option injection in a ref is refused", evilMerge.ok, false);
+
+    git(work, ["tag", "v1.0"]);
+    const tags = await call(work, "git/tags");
+    eq("tags are listed", tags.ok && tags.tags.some((entry) => entry.name === "v1.0"), true);
+    const tagPushed = await call(work, "git/tag-push", { name: "v1.0" });
+    eq("a tag pushes", tagPushed.ok, true);
+    eq(
+      "the remote has the tag",
+      git(world.base, ["--git-dir", "origin.git", "rev-parse", "v1.0"]).trim().length > 0,
+      true,
+    );
+    const tagDeleted = await call(work, "git/tag-delete", { name: "v1.0" });
+    eq("a tag deletes", tagDeleted.ok, true);
+    eq("an invalid tag name is refused", (await call(work, "git/tag-delete", { name: "-x" })).ok, false);
+
+    const remotes = await call(work, "git/remotes");
+    eq("remotes are listed", remotes.ok && remotes.remotes.some((entry) => entry.name === "origin"), true);
+
+    write(work, "f.txt", "stashed change\n");
+    eq("stash push succeeds", (await call(work, "git/stash", { action: "push", message: "ops stash" })).ok, true);
+    const shown = await call(work, "git/stash-show", { ref: "stash@{0}" });
+    eq("stash show renders the diff", shown.ok && String(shown.text).includes("stashed change"), true);
+    eq("a bogus stash ref is refused", (await call(work, "git/stash-show", { ref: "--help" })).ok, false);
+    eq("stash pop succeeds", (await call(work, "git/stash", { action: "pop" })).ok, true);
+
+    git(work, ["checkout", "-qb", "cmp-a"]);
+    write(work, "cmp.txt", "hello\n");
+    commitAll(work, "cmp work");
+    git(work, ["checkout", "-q", "main"]);
+    const compared = await call(work, "git/compare", { a: "main", b: "cmp-a" });
+    eq("compare returns the diff", compared.ok && String(compared.text).includes("cmp.txt"), true);
+    eq("compare needs two revisions", (await call(work, "git/compare", { a: "main" })).ok, false);
+    eq("deleting the compare branch succeeds", (await call(work, "git/branch-delete", { name: "cmp-a", force: true })).ok, true);
+
+    const byAuthor = await call(work, "git/log", { author: "worker" });
+    eq("author filter matches", byAuthor.ok && byAuthor.commits.length > 0, true);
+    const byNobody = await call(work, "git/log", { author: "nobody-at-all" });
+    eq("author filter excludes", byNobody.ok && byNobody.commits.length === 0, true);
+    const authors = await call(work, "git/authors", {});
+    eq("authors lists the committer with a count", authors.ok && authors.authors.some((entry) => entry.name === "worker" && entry.count > 0), true);
+    const oneAuthor = await call(work, "git/authors", { limit: 1 });
+    eq("authors honours the limit", oneAuthor.ok && oneAuthor.authors.length <= 1, true);
+    const byPath = await call(work, "git/log", { paths: ["login.txt"] });
+    eq("path filter finds the login commit", byPath.ok && byPath.commits.some((entry) => entry.subject.includes("login")), true);
+    const pathMiss = await call(work, "git/log", { paths: ["nope-not-here.txt"] });
+    eq("path filter misses cleanly", pathMiss.ok && pathMiss.commits.length === 0, true);
+    eq("an unsafe path is refused", (await call(work, "git/log", { paths: ["../evil"] })).ok, false);
+    const recent = await call(work, "git/log", { since: "1 day ago" });
+    eq("recent commits pass the since filter", recent.ok && recent.commits.length > 0, true);
+    const future = await call(work, "git/log", { since: "2030-01-01" });
+    eq("a future since matches nothing", future.ok && future.commits.length === 0, true);
+
+    eq("prune fetch succeeds", (await call(work, "git/fetch", { prune: true })).ok, true);
+
+    // A remote branch without a local counterpart: `track: true` creates the
+    // local tracking branch the way IDEA does, instead of detaching at it.
+    git(work, ["push", "-q", "origin", "feature/login"]);
+    git(work, ["branch", "-D", "feature/login"]);
+    const trackedNew = await call(work, "git/checkout", { name: "origin/feature/login", startPoint: "origin/feature/login", track: true });
+    eq("tracking checkout creates the local branch", trackedNew.ok, true);
+    eq("HEAD is attached to it", git(work, ["symbolic-ref", "--short", "HEAD"]).trim(), "feature/login");
+    eq(
+      "it tracks the remote branch",
+      git(work, ["for-each-ref", "--format=%(upstream:short)", "refs/heads/feature/login"]).trim(),
+      "origin/feature/login",
+    );
+    eq("at the remote's commit", head(work), git(work, ["rev-parse", "origin/feature/login"]).trim());
+    git(work, ["checkout", "-q", "main"]);
+    const remoteDeleted = await call(work, "git/branch-delete", { name: "origin/feature/login", remote: "origin" });
+    eq("a remote branch deletes", remoteDeleted.ok, true);
+    excludes(
+      "the remote no longer has it",
+      git(world.base, ["--git-dir", "origin.git", "show-ref"]),
+      "feature/login",
+    );
   }
 
   // ------------------------------------------------------------------ notes ---

@@ -57,15 +57,15 @@
 | `Stage Hunk` / `Discard Hunk` / `Unstage Hunk` | 提交 → diff 面板 | 鼠标悬停到工作区 diff 的 hunk 头时出现；已暂存 diff 上则是反向的 `Unstage Hunk` |
 | hunk 头上的附注 | 提交 → diff 面板 | 纯空白 hunk 标 `· whitespace only`；子模块指针变化标 `· submodule abc1234 → def5678` |
 | `Show Diff`、`Rollback`、`Add`/`Remove from index`、`Open File`、`Reveal in File Manager`、`Copy Hash` | 提交 → 文件右键菜单 | `Rollback` 会先确认；它会删除未跟踪文件、还原已跟踪文件 |
-| 分支控件（`main ↑2 ↓1`） | 两个工具栏 | 分支名、领先/落后，点开是本地/远端分支列表，点一行即 checkout；`New Branch`、`Fetch`、`Pull`、`Push`、`Force Push (with lease)`、`Stash Changes` 与储藏列表。（分支的**右键动作菜单在 Git 视图的 `Branches` 面板**里，工具栏弹层没有） |
+ | 分支控件（`main ↑2 ↓1`） | 两个工具栏 | 分支名、领先/落后，点开是本地/远端分支列表，点一行即 checkout；`New Branch`、`Merge into Current…`、`Rebase Current onto…`、`Rename`、`Set/Unset Upstream`、`Delete…`、`Fetch`、`Pull`、`Push`、`Force Push (with lease)`、`Stash Changes` 与储藏列表（Apply/Pop/Drop）。（分支的**完整右键动作菜单在 Git 视图的 `Branches` 面板**里，工具栏弹层是常用子集） |
 | 仓库控件（`mod · submodule`） | 两个工具栏 | 列出工作区仓库以及嵌套在它里面的每一个仓库——子模块、以及恰好住在这里的克隆——选中它就把整个工具窗口对准那个仓库。只有一个仓库时（单仓库项目）隐藏 |
 | `Log`、`Console` | Git → 页签 | Console 显示插件跑过的命令与输出，失败标红，可 `Clear All`（见下方「已知缺口」：探测型命令成功时不记录） |
 | 提交图 | Git → Log | 泳道由父提交信息算出；分支尖端黄色、本地分支绿色、远端紫色、标签灰色。自己的提交 subject 加粗，当前分支的行有底色 |
-| `Branches` 面板 | Git → Log → 左侧 | `Local branches` / `Remote branches`，点击即 checkout，右键出动作菜单 |
+ | `Branches` 面板 | Git → Log → 左侧 | `HEAD`（点一点回到当前提交）／`Local branches`／`Remote branches`（`feature/*` 这类按 `/` 折成可展开的文件夹；点远端分支会自动建本地跟踪分支，不再是 detached HEAD）／`Tags`（点一点按该标签过滤日志）／`Remotes`（Fetch / Fetch+Prune / 复制地址）／`Stashes`（Show / Apply / Pop / Drop）。分支右键：`Checkout`、`New Branch from Here`、`Merge into Current`、`Rebase Current onto Selected`、`Rename`、`Set/Unset Upstream`、`Delete`（未完全合并走二次确认）、`Copy Branch Name`、`Push`、`Fetch` |
 | `Changed Files`、`Commit Details` | Git → Log → 列表下方 | Details 显示哈希、作者、日期、subject 与完整正文 |
 | `Graph Options` | Git → 工具栏 | `By commit date` / `Topologically`、`Show First Parent`、`No Merges`、`Show Graph`、各面板开关 |
-| 过滤 | Git → 工具栏 | 文本搜索、分支过滤（见「已知缺口」：路径过滤字段目前不参与过滤） |
-| 提交动作 | Git → Log → 右键提交 | `Show Diff`、`Copy Revision Number`、`Checkout Revision`、`New Branch from Here`、`New Tag`、`Cherry-Pick`、`Revert`、`Reset Current Branch to Here`（soft/mixed/hard）、`Edit Commit Message`（仅 HEAD） |
+ | 过滤 | Git → 工具栏 | 文本搜索（本地 substring）、分支过滤、用户过滤（全部／只看我的）、日期过滤（全部／24 小时／一周／一月）、路径过滤（服务端 `git log -- <path>`，输入防抖 450ms、回车立即刷） |
+ | 提交动作 | Git → Log → 右键提交 | `Show Diff`、`Copy Revision Number`、`Copy Message`、`Compare with HEAD`、`Checkout Revision`、`New Branch from Here`、`New Tag`、`Cherry-Pick`、`Revert`、`Reset Current Branch to Here`（soft/mixed/hard）、`Edit Commit Message`（仅 HEAD） |
 | `Side-by-side viewer` / `Unified viewer` | diff 面板头部 | 两者渲染同一份解析好的 hunk |
 | `Ignore Differences` → `None` / `Ignore whitespaces` | diff 面板齿轮 | 由 Git 自己实现（`git diff -w`），不是把行藏起来。开着它时**禁用 hunk 暂存**，因为忽略空白的 diff 不是合法补丁 |
 | `Show Whitespaces` | diff 面板眼睛图标 | 空格渲染成 `·`，制表符渲染成 `→` |
@@ -501,7 +501,7 @@ node tools/build.mjs && node tools/smoke.mjs commit zh-CN
 
 诚实清单——这些是当前实现里确实存在、且用户可能撞上的限制：
 
-- **Git 工具栏的路径过滤字段目前不影响结果**：它会被写进状态，但提交列表只按文本搜索过滤。分支过滤与文本搜索是有效的。
+ - **文本搜索是本地过滤**：工具栏搜索框只在已取回的 200 条内做 substring 匹配；要按提交信息在服务端查，用分支／用户／日期／路径过滤（它们都进 `git log` 参数）。
 - **Console 不是「每条命令都记」**：探测型命令成功时不记录（见「引擎设计」），失败时 short/detail 都有长度上限。
 - **hunk 级操作的适用面**：`Ignore whitespaces` 打开时禁用，未跟踪文件禁用（整文件 `Add` 仍可用）。
 - **`Edit Commit Message` 只对 HEAD 开放**。
