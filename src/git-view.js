@@ -140,11 +140,15 @@
     return group;
   }
 
-  function refBadges(commit) {
-    return (commit.refs ?? []).map((ref) => {
+  function refBadges(commit, isHead) {
+    const list = (commit.refs ?? []).map((ref) => {
       const kind = ref.head ? "head" : ref.kind === "tag" ? "tag" : ref.kind === "remote" ? "remote" : "local";
       return h("span", { class: `badge ${kind}`, text: ref.name, title: ref.name });
     });
+    if (isHead && !(commit.refs ?? []).some((r) => r.head)) {
+      list.unshift(h("span", { class: "badge head", text: "HEAD", title: "HEAD" }));
+    }
+    return list;
   }
 
   /**
@@ -576,7 +580,7 @@
         const isHead = Boolean(headOid) && commit.hash === headOid;
         const selected = state.selection === commit.hash;
         const node = h("div", {
-          class: `log-row${isHead ? " current-branch" : ""}${me && commit.author === me ? " mine" : ""}`,
+          class: `log-row${isHead ? " current-branch is-head" : ""}${me && commit.author === me ? " mine" : ""}`,
           role: "option",
           tabindex: "0",
           "aria-selected": selected ? "true" : "false",
@@ -592,7 +596,7 @@
           h("div", { class: "log-body" }, [
             h("div", { class: "log-subject", title: commit.subject, text: commit.subject }),
             h("div", { class: "log-meta-line" }, [
-              ...refBadges(commit),
+              ...refBadges(commit, isHead),
               h("span", { class: "log-author", text: commit.author }),
               h("span", { class: "log-date", text: PIG.relativeTime(commit.timestamp) }),
               h("span", { class: "log-hash", text: commit.short }),

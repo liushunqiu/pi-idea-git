@@ -166,16 +166,18 @@
   align-items: center;
   gap: 5px;
   max-width: 220px;
-  padding: 2px 6px;
-  border: 1px solid transparent;
+  padding: 2px 8px;
+  border: 1px solid color-mix(in oklab, var(--border-soft) 85%, transparent);
   border-radius: var(--radius);
+  background: color-mix(in oklab, var(--chrome-bg) 92%, var(--fg) 8%);
   cursor: pointer;
   user-select: none;
+  transition: all 120ms ease;
 }
 
 .branch-chip:hover {
   border-color: var(--button-border);
-  background: var(--button-bg);
+  background: var(--button-hover);
 }
 
 .branch-chip .name {

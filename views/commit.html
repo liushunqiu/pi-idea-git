@@ -38,117 +38,121 @@
 :root {
   color-scheme: light dark;
 
-  /* ---- IntelliJ Light ---- */
+  /* ---- Modern Light (JetBrains New UI style) ---- */
   --bg: #ffffff;
-  --chrome-bg: #f7f8fa;
+  --chrome-bg: #f8f9fa;
   --panel-bg: #ffffff;
-  --panel-alt: #f2f4f7;
-  --border: #d1d5da;
-  --border-soft: #ebecf0;
+  --panel-alt: #f1f3f5;
+  --border: #d0d7de;
+  --border-soft: #e8ecf0;
   --fg: #1f2328;
-  --fg-secondary: #5a5d63;
-  --fg-muted: #8c8c8c;
-  --selection: #d4e2ff;
-  --selection-fg: #1f2328;
-  --selection-inactive: #e8eaed;
-  --hover: #edf1f7;
-  --focus-ring: #2e5c99;
+  --fg-secondary: #59636e;
+  --fg-muted: #8c959f;
+  --selection: #e0ecff;
+  --selection-fg: #0969da;
+  --selection-inactive: #f0f3f6;
+  --hover: rgba(0, 0, 0, 0.045);
+  --focus-ring: #0969da;
 
   --button-bg: #ffffff;
-  --button-border: #c4c8cd;
-  --button-hover: #f0f3f7;
-  --button-primary-bg: #3871e0;
+  --button-border: #d0d7de;
+  --button-hover: #f3f5f8;
+  --button-primary-bg: #1f6feb;
   --button-primary-fg: #ffffff;
-  --button-primary-hover: #2f63c9;
+  --button-primary-hover: #1958ba;
 
   --input-bg: #ffffff;
-  --input-border: #c4c8cd;
+  --input-border: #d0d7de;
 
-  --diff-inserted: #c6e4c1;
-  --diff-modified: #e9eff9;
-  --diff-deleted: #f7d2d2;
-  --diff-fragment: #c6d7f0;
-  --diff-divider: #ebecf0;
+  --diff-inserted: #dafbe1;
+  --diff-modified: #ddf4ff;
+  --diff-deleted: #ffebe9;
+  --diff-fragment: #b6e3ff;
+  --diff-divider: #e8ecf0;
 
-  --gutter-modified: #c3d6e8;
-  --gutter-added: #c9dec1;
-  --gutter-deleted: #d99b9b;
-  --gutter-whitespace: #eddcbc;
+  --gutter-modified: #98caf9;
+  --gutter-added: #8ddb9d;
+  --gutter-deleted: #f69d9d;
+  --gutter-whitespace: #edd8b4;
 
-  --status-added: #0a7700;
-  --status-modified: #0032a0;
-  --status-deleted: #616161;
-  --status-merged: #7503dc;
-  --status-conflict: #ff0000;
-  --status-ignored: #727238;
-  --status-renamed: #007c7c;
-  --status-unversioned: #993300;
+  --status-added: #1a7f37;
+  --status-modified: #0969da;
+  --status-deleted: #cf222e;
+  --status-merged: #8250df;
+  --status-conflict: #d1242f;
+  --status-ignored: #8c959f;
+  --status-renamed: #059669;
+  --status-unversioned: #b45309;
 
-  --graph-head: #f0c000;
-  --graph-local: #00a000;
-  --graph-remote: #9b4fc9;
-  --graph-tag: #999999;
+  --graph-head: #d97706;
+  --graph-local: #16a34a;
+  --graph-remote: #9333ea;
+  --graph-tag: #64748b;
 
-  --toolbar-h: 32px;
-  --row-h: 22px;
-  --radius: 4px;
-  --ui-font: -apple-system, BlinkMacSystemFont, "Segoe UI", "Helvetica Neue", sans-serif;
+  --toolbar-h: 34px;
+  --row-h: 26px;
+  --radius: 6px;
+  --ui-font: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
   --mono-font: ui-monospace, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace;
-  --ui-size: 12px;
+  --ui-size: 12.5px;
   --mono-size: 12px;
 }
 
 :root[data-theme="dark"] {
   color-scheme: dark;
 
-  /* ---- Darcula ---- */
-  --bg: #3c3f41;
-  --chrome-bg: #3c3f41;
-  --panel-bg: #313335;
-  --panel-alt: #2b2d2f;
-  --border: #555555;
-  --border-soft: #323438;
-  --fg: #bbbbbb;
-  --fg-secondary: #a9b1ba;
-  --fg-muted: #808080;
-  --selection: #2f65ca;
+  /* ---- Modern Dark (JetBrains New UI style) ---- */
+  --bg: #1e1f22;
+  --chrome-bg: #1e1f22;
+  --panel-bg: #232428;
+  --panel-alt: #1a1b1d;
+  --border: #393b40;
+  --border-soft: #2e3035;
+  --fg: #dfe1e5;
+  --fg-secondary: #9da0a8;
+  --fg-muted: #6f737a;
+  --selection: #2e436e;
   --selection-fg: #ffffff;
-  --selection-inactive: #46484a;
-  --hover: #4a4d4f;
-  --focus-ring: #7aa2f7;
+  --selection-inactive: #2d2f34;
+  --hover: rgba(255, 255, 255, 0.06);
+  --focus-ring: #3574f0;
 
-  --button-bg: #4c5052;
-  --button-border: #5f6164;
-  --button-hover: #5a5f62;
-  --button-primary-bg: #365880;
-  --button-primary-fg: #dce6f2;
-  --button-primary-hover: #3f6a9a;
+  --button-bg: #2b2d30;
+  --button-border: #3e4249;
+  --button-hover: #35383d;
+  --button-primary-bg: #3574f0;
+  --button-primary-fg: #ffffff;
+  --button-primary-hover: #3068d8;
 
-  --input-bg: #45494a;
-  --input-border: #5f6164;
+  --input-bg: #1e1f22;
+  --input-border: #3e4249;
 
-  --diff-inserted: #2b4034;
-  --diff-modified: #28323d;
-  --diff-deleted: #452a2e;
-  --diff-fragment: #3e546e;
-  /* Hue-matched fragments: a blue patch over a dark red row turns to mud. */
-  --diff-fragment-deleted: #6d353b;
-  --diff-fragment-inserted: #3d6249;
-  --diff-divider: #323438;
+  --diff-inserted: #1b382b;
+  --diff-modified: #1c2d42;
+  --diff-deleted: #3d1f24;
+  --diff-fragment: #284b6f;
+  --diff-fragment-deleted: #5c282e;
+  --diff-fragment-inserted: #254d38;
+  --diff-divider: #2e3035;
 
-  --gutter-modified: #374752;
-  --gutter-added: #4a7a5c;
-  --gutter-deleted: #a04c52;
-  --gutter-whitespace: #4c4638;
+  --gutter-modified: #36506c;
+  --gutter-added: #366044;
+  --gutter-deleted: #7d353b;
+  --gutter-whitespace: #4a4535;
 
-  --status-added: #629755;
-  --status-modified: #6897bb;
-  --status-deleted: #6c6c6c;
-  --status-merged: #9876aa;
-  --status-conflict: #d5756c;
-  --status-ignored: #848504;
-  --status-renamed: #4b9e9e;
-  --status-unversioned: #c07840;
+  --status-added: #57ab5a;
+  --status-modified: #58a6ff;
+  --status-deleted: #f85149;
+  --status-merged: #bc8cff;
+  --status-conflict: #ff7b72;
+  --status-ignored: #6e7681;
+  --status-renamed: #3fb950;
+  --status-unversioned: #d29922;
+
+  --graph-head: #fbbf24;
+  --graph-local: #4ade80;
+  --graph-remote: #c084fc;
+  --graph-tag: #94a3b8;
 }
 
 * {
@@ -210,8 +214,8 @@ button,
   align-items: center;
   justify-content: center;
   gap: 5px;
-  min-height: 22px;
-  padding: 2px 8px;
+  min-height: 24px;
+  padding: 3px 9px;
   border: 1px solid transparent;
   border-radius: var(--radius);
   background: transparent;
@@ -220,6 +224,7 @@ button,
   font: inherit;
   line-height: 1.3;
   white-space: nowrap;
+  transition: background 120ms ease, border-color 120ms ease, box-shadow 120ms ease, opacity 120ms ease;
 }
 
 button:hover:not(:disabled),
@@ -239,15 +244,18 @@ select:focus-visible {
 button:disabled {
   color: var(--fg-muted);
   cursor: default;
+  opacity: 0.6;
 }
 
 button.bordered {
   border-color: var(--button-border);
   background: var(--button-bg);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.04);
 }
 
 button.bordered:hover:not(:disabled) {
   background: var(--button-hover);
+  border-color: color-mix(in oklab, var(--button-border) 80%, var(--fg));
 }
 
 button.primary {
@@ -255,16 +263,20 @@ button.primary {
   background: var(--button-primary-bg);
   color: var(--button-primary-fg);
   font-weight: 600;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.12);
 }
 
 button.primary:hover:not(:disabled) {
   background: var(--button-primary-hover);
+  border-color: var(--button-primary-hover);
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.18);
 }
 
 button.primary:disabled {
   border-color: var(--button-border);
   background: var(--button-bg);
   color: var(--fg-muted);
+  box-shadow: none;
 }
 
 button.icon {
@@ -274,6 +286,12 @@ button.icon {
 
 button.icon svg {
   display: block;
+}
+
+button.icon.active {
+  background: color-mix(in oklab, var(--button-primary-bg) 18%, transparent);
+  color: var(--button-primary-bg);
+  border-color: color-mix(in oklab, var(--button-primary-bg) 35%, transparent);
 }
 
 .split-button {
@@ -485,27 +503,36 @@ textarea {
   top: 0;
   z-index: 1;
   align-items: center;
-  gap: 5px;
-  height: var(--row-h);
-  padding: 0 6px;
-  background: var(--chrome-bg);
+  gap: 6px;
+  height: calc(var(--row-h) + 2px);
+  padding: 0 8px;
+  margin: 3px 4px;
+  border-radius: var(--radius);
+  background: color-mix(in oklab, var(--chrome-bg) 95%, var(--fg) 5%);
+  border: 1px solid color-mix(in oklab, var(--border-soft) 80%, transparent);
   cursor: pointer;
   user-select: none;
   font-weight: 600;
+  font-size: 11.5px;
+  transition: background 120ms ease;
 }
 
 .group-header:hover {
-  background: var(--hover);
+  background: color-mix(in oklab, var(--chrome-bg) 88%, var(--fg) 12%);
 }
 
 .group-header .count {
-  color: var(--fg-muted);
-  font-weight: 400;
+  color: var(--fg-secondary);
+  font-weight: 500;
+  font-size: 11px;
+  padding: 1px 6px;
+  border-radius: 10px;
+  background: color-mix(in oklab, var(--fg) 8%, transparent);
 }
 
 .disclosure {
   display: inline-flex;
-  width: 10px;
+  width: 12px;
   justify-content: center;
   color: var(--fg-secondary);
   transform-origin: center;
@@ -521,10 +548,13 @@ textarea {
   align-items: center;
   gap: 6px;
   height: var(--row-h);
-  padding: 0 6px 0 2px;
+  padding: 0 8px 0 4px;
+  margin: 1px 4px;
+  border-radius: 4px;
   cursor: default;
   user-select: none;
   white-space: nowrap;
+  transition: background 100ms ease, color 100ms ease;
 }
 
 .tree-row:hover {
@@ -577,9 +607,10 @@ textarea {
 .status-cell {
   display: inline-block;
   flex: 0 0 auto;
-  width: 12px;
+  width: 14px;
+  margin-right: 4px;
   font-family: var(--mono-font);
-  font-size: 11px;
+  font-size: 11.5px;
   font-weight: 700;
   text-align: center;
 }
@@ -644,9 +675,13 @@ textarea {
 }
 
 .tree-row.dir-row .count {
-  color: var(--fg-muted);
-  font-size: 11px;
-  font-weight: 400;
+  margin-left: 6px;
+  padding: 1px 6px;
+  border-radius: 10px;
+  background: color-mix(in oklab, var(--fg) 8%, transparent);
+  color: var(--fg-secondary);
+  font-size: 10.5px;
+  font-weight: 500;
 }
 /* IDEA-style repository row: like a folder row, plus the per-repo color
    square and a branch pill. Files nested below it render one level deeper. */
@@ -656,6 +691,13 @@ textarea {
 }
 .tree-row.repo-row .name {
   color: var(--fg);
+}
+.tree-row.repo-row .muted {
+  margin-left: 6px;
+  font-size: 11px;
+}
+.tree-row.repo-row .badge {
+  margin-left: 6px;
 }
 .tree-row.repo-row .repo-color {
   flex: 0 0 auto;
@@ -804,21 +846,11 @@ textarea {
 /* Word-level highlight inside a changed line. The hue follows the row it sits
    on when a theme provides one: a blue patch over a red row reads as mud, which
    is exactly what the dark palette suffered from. */
-.diff-line .fragment {
-  border-radius: 2px;
-  background: var(--diff-fragment);
-}
-
-.diff-line.deleted .fragment {
-  background: var(--diff-fragment-deleted, var(--diff-fragment));
-}
-
-.diff-line.inserted .fragment {
-  background: var(--diff-fragment-inserted, var(--diff-fragment));
-}
-
+.diff-line .fragment,
+.diff-line.deleted .fragment,
+.diff-line.inserted .fragment,
 .diff-line .fragment.strong {
-  background: color-mix(in oklab, var(--diff-fragment) 60%, var(--button-primary-bg));
+  background: transparent;
 }
 
 .whitespace-mark {
@@ -950,8 +982,11 @@ textarea {
 }
 
 .commit-summary {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
   color: var(--fg-secondary);
-  font-size: 11px;
+  font-size: 11.5px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -959,6 +994,75 @@ textarea {
 
 .commit-summary.warn {
   color: var(--status-unversioned);
+}
+
+.commit-badge-staged {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 1px 7px;
+  border-radius: 12px;
+  background: color-mix(in oklab, var(--button-primary-bg) 14%, transparent);
+  color: var(--button-primary-bg);
+  font-weight: 600;
+  font-size: 11px;
+}
+
+/* Recent commit banner / card */
+.recent-commit-card {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px;
+  margin: 4px 8px 6px;
+  border-radius: var(--radius);
+  background: color-mix(in oklab, var(--panel-alt) 70%, var(--bg));
+  border: 1px solid var(--border-soft);
+  font-size: 11.5px;
+  animation: fadeInRecent 180ms ease;
+}
+
+.recent-commit-card .title-badge {
+  flex: 0 0 auto;
+  font-weight: 600;
+  color: var(--fg-secondary);
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.recent-commit-card .commit-hash {
+  flex: 0 0 auto;
+  font-family: var(--mono-font);
+  font-size: 11px;
+  color: var(--button-primary-bg);
+  font-weight: 600;
+}
+
+.recent-commit-card .commit-msg {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--fg);
+}
+
+.recent-commit-card .commit-actions-mini {
+  flex: 0 0 auto;
+  display: inline-flex;
+  gap: 4px;
+}
+
+.recent-commit-card .commit-actions-mini button {
+  min-height: 20px;
+  padding: 1px 6px;
+  font-size: 11px;
+}
+
+@keyframes fadeInRecent {
+  from { opacity: 0; transform: translateY(-3px); }
+  to { opacity: 1; transform: translateY(0); }
 }
 
 /* ------------------------------------------------------------------ popups */
@@ -1057,10 +1161,29 @@ textarea {
 }
 
 .log-row.current-branch {
-  background: color-mix(in oklab, var(--button-primary-bg) 10%, transparent);
+  background: color-mix(in oklab, var(--button-primary-bg) 6%, transparent);
 }
 
 .log-row.current-branch[aria-selected="true"] {
+  background: var(--selection);
+}
+
+.log-row.is-head {
+  position: relative;
+  background: color-mix(in oklab, var(--graph-head) 8%, transparent);
+}
+
+.log-row.is-head::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  width: 3px;
+  background: var(--graph-head);
+}
+
+.log-row.is-head[aria-selected="true"] {
   background: var(--selection);
 }
 
@@ -1636,16 +1759,18 @@ button.busy .spinner {
   align-items: center;
   gap: 5px;
   max-width: 220px;
-  padding: 2px 6px;
-  border: 1px solid transparent;
+  padding: 2px 8px;
+  border: 1px solid color-mix(in oklab, var(--border-soft) 85%, transparent);
   border-radius: var(--radius);
+  background: color-mix(in oklab, var(--chrome-bg) 92%, var(--fg) 8%);
   cursor: pointer;
   user-select: none;
+  transition: all 120ms ease;
 }
 
 .branch-chip:hover {
   border-color: var(--button-border);
-  background: var(--button-bg);
+  background: var(--button-hover);
 }
 
 .branch-chip .name {
@@ -1990,6 +2115,17 @@ window.__PI_IDEA_GIT_SURFACE__ = "commit";
       relativeMinutesAgo: "{{count}} minute{{s}} ago",
       relativeHoursAgo: "{{count}} hour{{s}} ago",
       relativeDaysAgo: "{{count}} day{{s}} ago",
+      onlyChecked: "Show only checked/staged",
+      filterOnlyChecked: "Filter: Checked only",
+      recentCommit: "Recent commit",
+      recentCommitTitle: "Last commit",
+      undoCommit: "Undo",
+      undoCommitTitle: "Undo latest commit (keep changes)",
+      viewCommitDiff: "View diff",
+      noCheckedChanges: "No changes are checked for this commit",
+      noCheckedHint: "Check items from Unstaged to include them in this commit",
+      goToHeadCommit: "Locate HEAD in Log",
+      headCommit: "HEAD",
     },
     "zh-CN": {
       commit: "提交",
@@ -2241,6 +2377,17 @@ window.__PI_IDEA_GIT_SURFACE__ = "commit";
       relativeMinutesAgo: "{{count}} 分钟前",
       relativeHoursAgo: "{{count}} 小时前",
       relativeDaysAgo: "{{count}} 天前",
+      onlyChecked: "仅看已勾选（本次提交）",
+      filterOnlyChecked: "筛选：仅看已勾选",
+      recentCommit: "最近提交",
+      recentCommitTitle: "最新提交",
+      undoCommit: "撤销提交",
+      undoCommitTitle: "撤销最新提交（保留所有改动）",
+      viewCommitDiff: "查看差异",
+      noCheckedChanges: "本次提交没有勾选任何变更",
+      noCheckedHint: "请勾选未暂存列表中的文件以纳入本次提交",
+      goToHeadCommit: "在日志中定位 HEAD",
+      headCommit: "HEAD",
     },
   };
 
@@ -4470,6 +4617,8 @@ function markSubmodule(hunk) {
       // Last `git/repos` answer: decides whether the toolbar Push opens the
       // multi-repo dialog instead of pushing the current repo directly.
       allRepos: [],
+      onlyChecked: false,
+      recentCommit: null,
      };
 
     // The repository chip comes first, as it does in IDEA: which repository —
@@ -4514,7 +4663,7 @@ function markSubmodule(hunk) {
     const changesWidth = h("div", { class: "commit-changes column" });
     const diffColumn = h("div", { class: "commit-diff column" });
     const divider = h("div", { class: "divider-v draggable", title: "" });
-
+    const recentCommitContainer = h("div", { class: "recent-commit-host" });
     /**
      * The repository this window is showing, as the repository list names it:
      * "." is the workspace's own, anything else sits inside it.
@@ -4712,9 +4861,16 @@ function markSubmodule(hunk) {
         },
       });
       changesHeader.append(h("span", { class: "search-field" }, [icon("search", 12), field]));
+      changesHeader.append(iconButton("check", t("onlyChecked"), () => {
+        state.onlyChecked = !state.onlyChecked;
+        paintChangesHeader();
+        paintChanges();
+      }, { size: 13, class: state.onlyChecked ? "icon active" : "icon", title: t("filterOnlyChecked") }));
       changesHeader.append(iconButton("gear", t("viewOptions"), (event) => {
         popup(event.currentTarget, [
           { type: "label", label: t("viewOptions") },
+          { label: t("onlyChecked"), checked: state.onlyChecked, onSelect: () => { state.onlyChecked = !state.onlyChecked; paintChangesHeader(); paintChanges(); } },
+          { type: "separator" },
           { label: t("groupByDirectory"), checked: state.groupByDirectory, onSelect: () => setViewOption("groupByDirectory", !state.groupByDirectory) },
           // Only meaningful inside a folder tree.
           { label: t("compactMiddleDirs"), checked: state.compactDirs, disabled: !state.groupByDirectory, onSelect: () => setViewOption("compactDirs", !state.compactDirs) },
@@ -5144,6 +5300,7 @@ function markSubmodule(hunk) {
       let groups = 0;
 
       for (const group of GROUPS) {
+        if (state.onlyChecked && group.id !== "staged") continue;
         const buckets = [];
         const rctx = rootCtx();
         const rootLists = filesForGroup(rctx, state.repo, group, filter);
@@ -5214,7 +5371,8 @@ function markSubmodule(hunk) {
       if (!groups) {
         const noFilter = !state.filter.trim();
         changesList.append(h("div", { class: "empty-state" }, [
-          h("div", { class: "headline", text: noFilter ? t("noChanges") : t("noMatchingChanges") }),
+          h("div", { class: "headline", text: state.onlyChecked ? t("noCheckedChanges") : (noFilter ? t("noChanges") : t("noMatchingChanges")) }),
+          state.onlyChecked ? h("div", { class: "muted", text: t("noCheckedHint") }) : null,
         ]));
       }
     }
@@ -5388,14 +5546,82 @@ function markSubmodule(hunk) {
          summary.append(t("nothingStaged"));
        } else {
          summary.className = "commit-summary";
-         // Whole sentence per locale via tf; `s` feeds the English plural only.
-         summary.append(PIG.tf("commitSummary", { staged, total, s: total === 1 ? "" : "s" }));
+         if (staged > 0) {
+           const badge = h("span", {
+             class: "commit-badge-staged",
+             style: { cursor: "pointer" },
+             title: t("filterOnlyChecked"),
+             onclick: () => {
+               state.onlyChecked = !state.onlyChecked;
+               paintChangesHeader();
+               paintChanges();
+             },
+           }, [
+             icon("check", 11),
+             h("span", { text: PIG.tf("commitSummary", { staged, total, s: total === 1 ? "" : "s" }) }),
+           ]);
+           summary.append(badge);
+         } else {
+           summary.append(PIG.tf("commitSummary", { staged, total, s: total === 1 ? "" : "s" }));
+         }
          const targets = stagedTargets();
          if (targets.length > 1) {
            summary.append(h("span", { class: "muted", text: ` · ${PIG.tf("commitMultipleRepos", { count: targets.length })}` }));
          }
        }
+       paintRecentCommit();
      }
+
+    function paintRecentCommit() {
+      PIG.clear(recentCommitContainer);
+      if (!state.recentCommit) return;
+      const c = state.recentCommit;
+      const shortHash = (c.hash ?? "").slice(0, 7);
+      const card = h("div", { class: "recent-commit-card" }, [
+        h("span", { class: "title-badge" }, [icon("gitCommit", 12), h("span", { text: t("recentCommitTitle") })]),
+        h("span", { class: "commit-hash", text: shortHash }),
+        h("span", { class: "commit-msg", text: c.subject || c.message || "", title: c.subject || c.message || "" }),
+        h("div", { class: "commit-actions-mini" }, [
+          h("button", {
+            class: "bordered",
+            type: "button",
+            title: t("viewCommitDiff"),
+            onclick: async () => {
+              const res = await invoke("git/commit-diff", { hash: c.hash });
+              if (res?.ok && res.diff) {
+                if (PIG.gitView?.openDiffOverlay) {
+                  PIG.gitView.openDiffOverlay(`${shortHash} ${c.subject}`, res.diff);
+                }
+              } else {
+                toast(PIG.errorText(res) || t("noDiff"), "error");
+              }
+            },
+          }, [icon("eye", 11), h("span", { text: t("viewCommitDiff") })]),
+          h("button", {
+            class: "bordered",
+            type: "button",
+            title: t("undoCommitTitle"),
+            onclick: async () => {
+              const ok = await dialog({
+                title: t("undoCommit"),
+                message: `${t("undoCommitTitle")}\n${shortHash}: ${c.subject}`,
+                confirmText: t("undoCommit"),
+                danger: false,
+              });
+              if (!ok) return;
+              const res = await invoke("git/reset", { commit: "HEAD~1", mode: "soft" });
+              if (res?.ok) {
+                toast(t("undoCommit"), "info");
+                await refresh();
+              } else {
+                toast(PIG.errorText(res), "error");
+              }
+            },
+          }, [icon("undo", 11), h("span", { text: t("undoCommit") })]),
+        ]),
+      ]);
+      recentCommitContainer.append(card);
+    }
 
     function operationButton(label, operation, action) {
       return h("button", {
@@ -5592,7 +5818,7 @@ function markSubmodule(hunk) {
     }
 
     function paintAll() {
-      for (const step of [paintToolbar, paintChangesHeader, paintChanges, paintDiff, paintCommit, paintGenerate]) {
+      for (const step of [paintToolbar, paintChangesHeader, paintChanges, paintDiff, paintCommit, paintGenerate, paintRecentCommit]) {
         try {
           step();
         } catch (error) {
@@ -5912,6 +6138,7 @@ function markSubmodule(hunk) {
     root.append(toolbar);
     root.append(h("div", { class: "commit-view" }, [changesWidth, divider, diffColumn]));
     root.append(h("div", { class: "commit-area" }, [
+      recentCommitContainer,
       h("div", { class: "commit-message-row" }, [
         messageInput,
         h("div", { class: "commit-history" }, [
@@ -6054,6 +6281,12 @@ function markSubmodule(hunk) {
              }
            }
          }
+       }
+       try {
+         const logRes = await invoke("git/log", { limit: 1 });
+         state.recentCommit = (logRes?.ok && (logRes.commits ?? []).length > 0) ? logRes.commits[0] : null;
+       } catch {
+         state.recentCommit = null;
        }
        paintAll();
        await loadDiff();
@@ -6264,11 +6497,15 @@ function markSubmodule(hunk) {
     return group;
   }
 
-  function refBadges(commit) {
-    return (commit.refs ?? []).map((ref) => {
+  function refBadges(commit, isHead) {
+    const list = (commit.refs ?? []).map((ref) => {
       const kind = ref.head ? "head" : ref.kind === "tag" ? "tag" : ref.kind === "remote" ? "remote" : "local";
       return h("span", { class: `badge ${kind}`, text: ref.name, title: ref.name });
     });
+    if (isHead && !(commit.refs ?? []).some((r) => r.head)) {
+      list.unshift(h("span", { class: "badge head", text: "HEAD", title: "HEAD" }));
+    }
+    return list;
   }
 
   /**
@@ -6700,7 +6937,7 @@ function markSubmodule(hunk) {
         const isHead = Boolean(headOid) && commit.hash === headOid;
         const selected = state.selection === commit.hash;
         const node = h("div", {
-          class: `log-row${isHead ? " current-branch" : ""}${me && commit.author === me ? " mine" : ""}`,
+          class: `log-row${isHead ? " current-branch is-head" : ""}${me && commit.author === me ? " mine" : ""}`,
           role: "option",
           tabindex: "0",
           "aria-selected": selected ? "true" : "false",
@@ -6716,7 +6953,7 @@ function markSubmodule(hunk) {
           h("div", { class: "log-body" }, [
             h("div", { class: "log-subject", title: commit.subject, text: commit.subject }),
             h("div", { class: "log-meta-line" }, [
-              ...refBadges(commit),
+              ...refBadges(commit, isHead),
               h("span", { class: "log-author", text: commit.author }),
               h("span", { class: "log-date", text: PIG.relativeTime(commit.timestamp) }),
               h("span", { class: "log-hash", text: commit.short }),

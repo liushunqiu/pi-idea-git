@@ -584,6 +584,8 @@
       // Last `git/repos` answer: decides whether the toolbar Push opens the
       // multi-repo dialog instead of pushing the current repo directly.
       allRepos: [],
+      onlyChecked: false,
+      recentCommit: null,
      };
 
     // The repository chip comes first, as it does in IDEA: which repository —
@@ -628,7 +630,7 @@
     const changesWidth = h("div", { class: "commit-changes column" });
     const diffColumn = h("div", { class: "commit-diff column" });
     const divider = h("div", { class: "divider-v draggable", title: "" });
-
+    const recentCommitContainer = h("div", { class: "recent-commit-host" });
     /**
      * The repository this window is showing, as the repository list names it:
      * "." is the workspace's own, anything else sits inside it.
@@ -826,9 +828,16 @@
         },
       });
       changesHeader.append(h("span", { class: "search-field" }, [icon("search", 12), field]));
+      changesHeader.append(iconButton("check", t("onlyChecked"), () => {
+        state.onlyChecked = !state.onlyChecked;
+        paintChangesHeader();
+        paintChanges();
+      }, { size: 13, class: state.onlyChecked ? "icon active" : "icon", title: t("filterOnlyChecked") }));
       changesHeader.append(iconButton("gear", t("viewOptions"), (event) => {
         popup(event.currentTarget, [
           { type: "label", label: t("viewOptions") },
+          { label: t("onlyChecked"), checked: state.onlyChecked, onSelect: () => { state.onlyChecked = !state.onlyChecked; paintChangesHeader(); paintChanges(); } },
+          { type: "separator" },
           { label: t("groupByDirectory"), checked: state.groupByDirectory, onSelect: () => setViewOption("groupByDirectory", !state.groupByDirectory) },
           // Only meaningful inside a folder tree.
           { label: t("compactMiddleDirs"), checked: state.compactDirs, disabled: !state.groupByDirectory, onSelect: () => setViewOption("compactDirs", !state.compactDirs) },
@@ -1258,6 +1267,7 @@
       let groups = 0;
 
       for (const group of GROUPS) {
+        if (state.onlyChecked && group.id !== "staged") continue;
         const buckets = [];
         const rctx = rootCtx();
         const rootLists = filesForGroup(rctx, state.repo, group, filter);
@@ -1328,7 +1338,8 @@
       if (!groups) {
         const noFilter = !state.filter.trim();
         changesList.append(h("div", { class: "empty-state" }, [
-          h("div", { class: "headline", text: noFilter ? t("noChanges") : t("noMatchingChanges") }),
+          h("div", { class: "headline", text: state.onlyChecked ? t("noCheckedChanges") : (noFilter ? t("noChanges") : t("noMatchingChanges")) }),
+          state.onlyChecked ? h("div", { class: "muted", text: t("noCheckedHint") }) : null,
         ]));
       }
     }
@@ -1502,14 +1513,82 @@
          summary.append(t("nothingStaged"));
        } else {
          summary.className = "commit-summary";
-         // Whole sentence per locale via tf; `s` feeds the English plural only.
-         summary.append(PIG.tf("commitSummary", { staged, total, s: total === 1 ? "" : "s" }));
+         if (staged > 0) {
+           const badge = h("span", {
+             class: "commit-badge-staged",
+             style: { cursor: "pointer" },
+             title: t("filterOnlyChecked"),
+             onclick: () => {
+               state.onlyChecked = !state.onlyChecked;
+               paintChangesHeader();
+               paintChanges();
+             },
+           }, [
+             icon("check", 11),
+             h("span", { text: PIG.tf("commitSummary", { staged, total, s: total === 1 ? "" : "s" }) }),
+           ]);
+           summary.append(badge);
+         } else {
+           summary.append(PIG.tf("commitSummary", { staged, total, s: total === 1 ? "" : "s" }));
+         }
          const targets = stagedTargets();
          if (targets.length > 1) {
            summary.append(h("span", { class: "muted", text: ` · ${PIG.tf("commitMultipleRepos", { count: targets.length })}` }));
          }
        }
+       paintRecentCommit();
      }
+
+    function paintRecentCommit() {
+      PIG.clear(recentCommitContainer);
+      if (!state.recentCommit) return;
+      const c = state.recentCommit;
+      const shortHash = (c.hash ?? "").slice(0, 7);
+      const card = h("div", { class: "recent-commit-card" }, [
+        h("span", { class: "title-badge" }, [icon("gitCommit", 12), h("span", { text: t("recentCommitTitle") })]),
+        h("span", { class: "commit-hash", text: shortHash }),
+        h("span", { class: "commit-msg", text: c.subject || c.message || "", title: c.subject || c.message || "" }),
+        h("div", { class: "commit-actions-mini" }, [
+          h("button", {
+            class: "bordered",
+            type: "button",
+            title: t("viewCommitDiff"),
+            onclick: async () => {
+              const res = await invoke("git/commit-diff", { hash: c.hash });
+              if (res?.ok && res.diff) {
+                if (PIG.gitView?.openDiffOverlay) {
+                  PIG.gitView.openDiffOverlay(`${shortHash} ${c.subject}`, res.diff);
+                }
+              } else {
+                toast(PIG.errorText(res) || t("noDiff"), "error");
+              }
+            },
+          }, [icon("eye", 11), h("span", { text: t("viewCommitDiff") })]),
+          h("button", {
+            class: "bordered",
+            type: "button",
+            title: t("undoCommitTitle"),
+            onclick: async () => {
+              const ok = await dialog({
+                title: t("undoCommit"),
+                message: `${t("undoCommitTitle")}\n${shortHash}: ${c.subject}`,
+                confirmText: t("undoCommit"),
+                danger: false,
+              });
+              if (!ok) return;
+              const res = await invoke("git/reset", { commit: "HEAD~1", mode: "soft" });
+              if (res?.ok) {
+                toast(t("undoCommit"), "info");
+                await refresh();
+              } else {
+                toast(PIG.errorText(res), "error");
+              }
+            },
+          }, [icon("undo", 11), h("span", { text: t("undoCommit") })]),
+        ]),
+      ]);
+      recentCommitContainer.append(card);
+    }
 
     function operationButton(label, operation, action) {
       return h("button", {
@@ -1706,7 +1785,7 @@
     }
 
     function paintAll() {
-      for (const step of [paintToolbar, paintChangesHeader, paintChanges, paintDiff, paintCommit, paintGenerate]) {
+      for (const step of [paintToolbar, paintChangesHeader, paintChanges, paintDiff, paintCommit, paintGenerate, paintRecentCommit]) {
         try {
           step();
         } catch (error) {
@@ -2026,6 +2105,7 @@
     root.append(toolbar);
     root.append(h("div", { class: "commit-view" }, [changesWidth, divider, diffColumn]));
     root.append(h("div", { class: "commit-area" }, [
+      recentCommitContainer,
       h("div", { class: "commit-message-row" }, [
         messageInput,
         h("div", { class: "commit-history" }, [
@@ -2168,6 +2248,12 @@
              }
            }
          }
+       }
+       try {
+         const logRes = await invoke("git/log", { limit: 1 });
+         state.recentCommit = (logRes?.ok && (logRes.commits ?? []).length > 0) ? logRes.commits[0] : null;
+       } catch {
+         state.recentCommit = null;
        }
        paintAll();
        await loadDiff();
